@@ -64,6 +64,7 @@ def test_builtin_profiles_are_conservative_candidates() -> None:
         "Qwen2.5-0.5B",
         "MiniCPM4-0.5B",
         "DistilQwen2.5-DS3-0324-7B",
+        "Qwen3-4B",
         "Gemma-small",
     }
     assert all(profile.status == "candidate" for profile in profiles)
