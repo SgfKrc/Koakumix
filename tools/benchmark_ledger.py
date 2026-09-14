@@ -34,7 +34,7 @@ _ABSOLUTE_PATH = re.compile(r"(?:^[A-Za-z]:[\\/]|^[A-Za-z]:|^/|^\\\\)")
 _IP_TEXT = re.compile(r"(?<![0-9A-Fa-f:.])(?:[0-9]{1,3}(?:\.[0-9]{1,3}){3}|[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){2,})(?![0-9A-Fa-f:.])")
 _SECRET_KEYS = frozenset({"token", "secret", "password", "authorization", "api_key", "private_key"})
 _VOLATILE_KEYS = frozenset({"created_at", "generated_at", "timestamp", "started_at", "ended_at"})
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_SOURCE_REFS = (
     Path("fixtures/benchmark/defense-benchmark-v1.json"),
     Path("scripts/demo/real-model-performance-not-run.json"),
