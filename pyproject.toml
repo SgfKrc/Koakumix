@@ -24,3 +24,6 @@ package-dir = { "harness_workbench" = "." }
 where = ["."]
 include = ["harness_workbench*"]
 namespaces = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

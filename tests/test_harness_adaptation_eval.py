@@ -27,7 +27,7 @@ from harness_workbench.eval import (
     run_red_team,
 )
 from harness_workbench.eval.report import promotion_gate, summarize_replay
-from tests.test_harness_model_profiles import _profile
+from .test_harness_model_profiles import _profile
 
 
 class FixtureRunner:

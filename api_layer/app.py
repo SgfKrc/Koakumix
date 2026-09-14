@@ -8,8 +8,8 @@ from typing import Any, Iterable, Mapping
 
 from ..adapters.base import AdapterError, AdapterRequest, ChatAdapter
 from ..context_engine import ContextBudget, ContextPolicy, ContextMessage
-from ..image_workbench.assets import ImageAssetStore
-from ..image_workbench.contracts import ImageAdapter, ImageAdapterError, ImageRequest, ImageRequestError
+from ..image.assets import ImageAssetStore
+from ..image.contracts import ImageAdapter, ImageAdapterError, ImageRequest, ImageRequestError
 from ..memory import MemoryStore
 from ..mcp_server import HarnessMCPDependencies, MCPServer, MCPToolError
 from ..model_profiles import builtin_profiles

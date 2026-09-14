@@ -7,8 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from ..image_workbench.contracts import ImageAdapter, ImageRequest
-from ..image_workbench.assets import ImageAssetStore
+from ..image.contracts import ImageAdapter, ImageRequest
+from ..image.assets import ImageAssetStore
 from ..memory import MemoryStore
 from ..rag import HybridRagRetriever, RagStore, build_context
 from ..session import SessionStore
@@ -89,6 +89,8 @@ def register_builtin_tools(
         _definition("web_fetch", "Fetch one HTTPS resource through the configured SSRF-safe network client.", _schema({"url": {"type": "string", "maxLength": 4096}, "max_chars": {"type": "integer", "minimum": 1, "maximum": 32768}, "allow_external": {"type": "boolean"}}, required=("url",)), _web_fetch(deps), configured=deps.network_client is not None, open_world=True),
         _definition("image_capabilities", "Report the configured image adapter capabilities.", _schema({}), _image_capabilities(deps), configured=deps.image_adapter is not None),
         _definition("image_generate", "Generate one image through the configured image adapter.", _schema({"prompt": {"type": "string", "maxLength": 4000}, "negative_prompt": {"type": "string", "maxLength": 4000}, "model": {"type": "string", "maxLength": 128}, "width": {"type": "integer", "minimum": 64, "maximum": 768}, "height": {"type": "integer", "minimum": 64, "maximum": 768}, "steps": {"type": "integer", "minimum": 1, "maximum": 100}, "guidance_scale": {"type": "number", "minimum": 0, "maximum": 30}, "seed": {"type": "integer"}, "response_format": {"type": "string", "enum": ["b64_json", "url"]}, "user": {"type": "string", "maxLength": 128}}, required=("prompt",)), _image_generate(deps), configured=deps.image_adapter is not None, read_only=False),
+        _definition("skill_list", "List Koakumix built-in skills with their input contracts.", _schema({}), _skill_list(deps), configured=True),
+        _definition("skill_run", "Run one built-in skill by name with JSON arguments.", _schema({"name": {"type": "string", "maxLength": 64}, "arguments": {"type": "object"}}, required=("name",)), _skill_run(deps), configured=True, read_only=False),
     )
     for definition in definitions:
         registry.register(definition)
@@ -226,6 +228,36 @@ def _image_capabilities(deps: HarnessMCPDependencies) -> Callable[[Mapping[str, 
         del arguments
         adapter = _require(deps.image_adapter, "images_unavailable", "image adapter is not configured")
         return adapter.capabilities().as_dict()
+
+    return handler
+
+
+def _skill_registry(deps: HarnessMCPDependencies) -> Any:
+    from ..skills import build_registry
+
+    return build_registry(image_adapter=deps.image_adapter, image_store=deps.image_store)
+
+
+def _skill_list(deps: HarnessMCPDependencies) -> Callable[[Mapping[str, Any]], Any]:
+    def handler(arguments: Mapping[str, Any]) -> Any:
+        del arguments
+        return {"skills": _skill_registry(deps).describe()}
+
+    return handler
+
+
+def _skill_run(deps: HarnessMCPDependencies) -> Callable[[Mapping[str, Any]], Any]:
+    from ..skills import SkillError
+
+    def handler(arguments: Mapping[str, Any]) -> Any:
+        name = str(arguments.get("name") or "")
+        payload = arguments.get("arguments") or {}
+        if not isinstance(payload, Mapping):
+            raise MCPToolError("invalid_skill_arguments", "skill arguments must be an object")
+        try:
+            return _skill_registry(deps).run(name, payload)
+        except SkillError as exc:
+            raise MCPToolError(exc.code, str(exc)) from exc
 
     return handler
 

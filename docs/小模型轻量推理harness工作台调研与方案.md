@@ -154,7 +154,7 @@ evidence:
 |---|---|---|
 | `src/api_server.py`（FastAPI） | `/api/chat`、`/api/chat/stream`（full/fast/interactive 流式）、`/api/chat/upload`（多模态）、`/api/sessions` | **qlh_adapter 反代目标**：仅契约，即本机进程或远端 `--host` |
 | `ChatRequest` 契约 | `routing_preference`（auto/local_only/distributed_preferred/distributed_required）、`max_new_tokens`、`session_id`、`image_data_urls`（≤4）、`show_thinking`、`execution_mode/task_graph` | 适配器内**最小客户端**（复制字段 + 契约单测）；OpenAI 请求 → QLH 请求的映射 |
-| 图像生成与编辑 | 主项目已于 2026-09-14 移除 `/api/diffusion/*`、SD 资产和运行时；仅保留图片上传与多模态理解 | **Koakumix 独占**：`image_workbench` 自行管理生图资产、依赖和执行器，对外提供 `/v1/images/generations`，不再远程调用主项目生图 |
+| 图像生成与编辑 | 主项目已于 2026-09-14 移除 `/api/diffusion/*`、SD 资产和运行时；仅保留图片上传与多模态理解 | **Koakumix 独占**：`image` 自行管理生图资产、依赖和执行器，对外提供 `/v1/images/generations`，不再远程调用主项目生图 |
 | RAG | `/api/rag/*`（FTS5 + 有界向量 + 容量预算 + ANN 决策门） | 长文档入口经 qlh_adapter（仅远端/主节点模式；本地独立模式 S4 评估） |
 | 多模态 | `llama_engine.py`（llama.cpp mtmd/mmproj）、`qwen3_multimodal_*`、QW3-VL 契约 | 经 adapter 契约；本地纯玩模式走 llama-server（`--mmproj`），注意 §2.3-5 约束 |
 | `src/tui_chat.py`（Textual） | 已是"HTTP 客户端 + 终端聊天"；`--host` 缺省连本地后端；Markdown 渲染防注入 | **仅作交互形态参考**（双进程入口、防注入、done 指标语义）；harness 自带 UI 不 import |
@@ -200,7 +200,7 @@ harness_workbench/                 # 独立子项目（独立包/仓库，仅共
 │  └─ notices.py                   # 所有裁剪/摘要动作的可见通知（禁止静默截断）
 ├─ session/                        # 会话状态（SQLite 落盘 + 决策日志 + 资产引用）
 ├─ rag/                            # FTS5 优先检索、可替换 embedding provider、有界上下文
-├─ image_workbench/                # Koakumix 独占生图工作区：/v1/images 封装、图片→会话资产、缩略卡入上下文
+├─ image/                # Koakumix 独占生图工作区：/v1/images 封装、图片→会话资产、缩略卡入上下文
 │  └─ local_engine.py              # 本地生图执行器（自持资产与依赖；不经 QLH HTTP 契约）
 ├─ transport/                      # 连接管理（adapter 底座：重连/超时/退避；不感知具体后端）
 ├─ ui_react/                       # 独立 React 工作台（赛博哥特结构，青蓝/洋红主题）
@@ -233,7 +233,7 @@ harness_workbench/                 # 独立子项目（独立包/仓库，仅共
 ### 4.4 生图工作区（S3 交付）
 
 - harness 只暴露 OpenAI 兼容生图接口（`POST /v1/images/generations`），本地与远端走**两条独立路径**：
-  - **本地（不经 HTTP 契约）**：`image_workbench/local_engine.py` 验证 Koakumix 自有资产清单，再调用注入式本地执行器消费本地生图工件；高级编辑也只能在 Koakumix 内实现。
+  - **本地（不经 HTTP 契约）**：`image/local_engine.py` 验证 Koakumix 自有资产清单，再调用注入式本地执行器消费本地生图工件；高级编辑也只能在 Koakumix 内实现。
   - **主项目适配**：不再提供远端生图路径；`qlh` 适配器只负责主项目文本推理、路由、RAG 和多模态理解。
 - **S3.1 本票边界**：`contracts.py` 固化尺寸、步数、提示词和响应格式校验；`manifest.py` 校验资产存在性、大小及可选 SHA-256；`local_engine.py` 保持与主项目解耦。默认执行器明确返回 `local_image_runtime_unavailable`，环境中偶然存在 `torch/diffusers` 不能替代真实执行器证明。
 - 图片由 `ImageAssetStore` 写入用户指定根目录，响应可返回 `b64_json` 或用户资产 URL；绝对路径不出现在 API 响应和报告中。缩略图、会话引用与多模态追问闭环进入后续票。
@@ -302,7 +302,7 @@ model profile
 | **S1.5 模型画像与能力探测** | `model_profiles/` + `capability_gate` + profile schema | **Completed（本机开发门）**；已登记 QW1.8B、Qwen3-0.6B、Gemma-small 候选；本地元数据、模板/stop/thinking/工具/多模态状态可解释；unknown 不得进入 autonomous tools 或 production |
 | **S2 API 层 + 本地 adapter** | `api_layer/` + `adapters/llama_server` + `cli.py` + TUI | **Completed（本机开发门）**；OpenAI 请求映射、非流式/SSE、能力通告、上下文显式映射、子进程生命周期和 fake transport 已通过专项测试；真实 llama-server 二进制/模型对聊后置验收；**不启动主项目也可独立运行** |
 | **S2.5 定制化实验台** | `adaptation/` + `eval/` + fixture/replay 报告 | **Completed（离线本机开发门）**；同一模型可比较两种 prompt/template、两种上下文策略和两组资源预算；报告同时给质量、延迟、RSS/VRAM、回退和 holdout；真实模型 runner 后置 |
-| **S3 生图工作区** | `image_workbench/`（contracts + manifest + assets + local_engine + remote_qlh） | **开发完成（离线本机门）**：`/v1/images/generations` 契约、本地 manifest 校验、注入式本地执行器、用户资产落盘、远端 qlh job/blob 映射和 `b64_json`/URL 响应已实现；真实 diffusers/CUDA 执行器、多模态追问和高级编辑仍后置验收 |
+| **S3 生图工作区** | `image/`（contracts + manifest + assets + local_engine + remote_qlh） | **开发完成（离线本机门）**：`/v1/images/generations` 契约、本地 manifest 校验、注入式本地执行器、用户资产落盘、远端 qlh job/blob 映射和 `b64_json`/URL 响应已实现；真实 diffusers/CUDA 执行器、多模态追问和高级编辑仍后置验收 |
 | **S4 远端与 RAG** | `adapters/qlh.py` + `session/` + `rag/` + `/v1/rag/*` + `/v1/sessions/*` | **开发完成（离线本机门）**：QLH `/api/chat`/SSE 映射、SQLite 用户会话与资产引用、FTS5 owner scope 硬过滤、可替换 embedding 契约、有界引用上下文；真实 30k 文档预算、远端真机对聊和 nomic 长时 provider 后置验收 |
 | **S5 评估与收口** | `adapters/ollama` 对照、契约漂移检测、文档、Pareto 总结 | 玩具定位复核 + "换后端成本"实测：不行则砍 ollama 而不是返工；至少保留一组可公开演示的定制化前后对照 |
 | **S6 工作台 UI** | `ui_react/` + `tui.py` + UI contract tests | React 工作台与 Textual TUI 共享 `/v1` 合同；主题、fixture/offline 状态、会话/RAG/资产入口一致；真实端到端质量和长时网络仍后置 |
@@ -497,16 +497,16 @@ model profile
 
 本票完成生图工作区的工程合同和两条后端路径，不把 fake executor 或异步 job 结果写成真实本地生图能力：
 
-- `image_workbench/contracts.py` 固化 prompt、尺寸、步数、引导强度、seed、模型和响应格式；非法尺寸、越界参数和不受支持的响应格式在 API 边界 fail-closed。
-- `image_workbench/manifest.py` 独立解析 Koakumix 自有 `.qlh-sd-asset.json`，检查相对路径、重复项、文件存在性、大小和可选 SHA-256；不 import QLH 主项目代码，也不把绝对资产路径返回给调用方。
-- `image_workbench/local_engine.py` 只负责 manifest 闸门和 executor 生命周期。当前默认 executor 明确返回 `local_image_runtime_unavailable`；测试替身可以证明请求、工件和生成结果的连接，但不能替代 CUDA/diffusers 验收。
-- 原 `image_workbench/remote_qlh.py` 已删除（2026-09-14）；Koakumix 不再调用 QLH `/api/diffusion/*`，生图能力统一由本地 image_workbench 管理。
+- `image/contracts.py` 固化 prompt、尺寸、步数、引导强度、seed、模型和响应格式；非法尺寸、越界参数和不受支持的响应格式在 API 边界 fail-closed。
+- `image/manifest.py` 独立解析 Koakumix 自有 `.qlh-sd-asset.json`，检查相对路径、重复项、文件存在性、大小和可选 SHA-256；不 import QLH 主项目代码，也不把绝对资产路径返回给调用方。
+- `image/local_engine.py` 只负责 manifest 闸门和 executor 生命周期。当前默认 executor 明确返回 `local_image_runtime_unavailable`；测试替身可以证明请求、工件和生成结果的连接，但不能替代 CUDA/diffusers 验收。
+- 原 `image/remote_qlh.py` 已删除（2026-09-14）；Koakumix 不再调用 QLH `/api/diffusion/*`，生图能力统一由本地 image 管理。
 - `ImageAssetStore` 将图片和最小 prompt/尺寸/seed 元数据写入用户指定根目录，先写临时文件再原子替换，读回时重新校验 SHA-256。`api_layer/app.py` 新增 `/v1/images/capabilities`、`/v1/images/generations` 和资产读取端点。
 
 验证命令：
 
 ```text
-.\\.venv-test\\Scripts\\python.exe -m pytest tests/test_harness_image_workbench.py -q
+.\\.venv-test\\Scripts\\python.exe -m pytest tests/test_harness_image.py -q
 7 passed
 ```
 
@@ -855,7 +855,7 @@ ui_react: npm run build       # tsc --noEmit + vite build 通过
 验证证据：
 
 ```text
-.\\.venv-test\\Scripts\\python.exe -m pytest tests/test_harness_image_workbench.py tests/test_harness_s4_remote_rag.py tests/test_harness_ui.py -q
+.\\.venv-test\\Scripts\\python.exe -m pytest tests/test_harness_image.py tests/test_harness_s4_remote_rag.py tests/test_harness_ui.py -q
 18 passed
 ui_react: npm run build       # tsc --noEmit + vite build 通过
 ```

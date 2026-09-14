@@ -15,7 +15,7 @@ Koakumix 是 QLH 项目的**小模型本地增强对话 harness**（原 `harness
 | `memory/` | 跨会话长期记忆（提取/存储/检索） |
 | `rag/` | 分块策略、索引粒度与离线基线 |
 | `eval/` `research/` | 评测夹具、红队契约、角色非对称报告 |
-| `image_workbench/` | **图像生成**（本地引擎 + 资产 manifest/契约） |
+| `image/` | **图像生成**（本地引擎 + 资产 manifest/契约） |
 | `mcp_server/` | MCP 工具面（含 `image_generate`） |
 | `model_profiles/` | 模型画像与小模型档位 |
 | `cli.py` `tui.py` | 命令行与 TUI 入口 |

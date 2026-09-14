@@ -6,7 +6,7 @@ import pytest
 
 from harness_workbench.adapters.base import AdapterCapabilities, AdapterModel, AdapterRequest, AdapterResponse, StreamChunk
 from harness_workbench.api_layer import create_app
-from harness_workbench.image_workbench import (
+from harness_workbench.image import (
     GeneratedImage,
     ImageAdapterCapabilities,
     ImageAssetStore,

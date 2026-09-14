@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 from pathlib import Path
 
 from .adapters import LlamaServerAdapter, LlamaServerConfig, LlamaServerProcess
@@ -25,7 +27,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _skill_main(argv: list[str]) -> int:
+    """``koakumix skill list`` / ``koakumix skill run <name> --json '{...}'``。"""
+    from .skills import SkillError, build_registry
+
+    parser = argparse.ArgumentParser(prog="koakumix skill", description="Koakumix 内置技能")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list", help="列出内置技能")
+    run = sub.add_parser("run", help="执行内置技能")
+    run.add_argument("name")
+    run.add_argument("--json", default="{}", help="技能输入（JSON 字符串）")
+    args = parser.parse_args(argv)
+
+    registry = build_registry()  # CLI 不注入生图引擎：list 可用，run 会明确提示未配置
+    if args.cmd == "list":
+        print(json.dumps(registry.describe(), ensure_ascii=False, indent=2))
+        return 0
+    try:
+        payload = json.loads(args.json)
+        if not isinstance(payload, dict):
+            raise ValueError("--json 必须是 JSON 对象")
+        result = registry.run(args.name, payload)
+    except (SkillError, ValueError) as exc:
+        code = getattr(exc, "code", "invalid_json")
+        print(f"{code}: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["skill"]:
+        return _skill_main(argv[1:])
     args = build_parser().parse_args(argv)
     config = LlamaServerConfig(
         executable=args.llama_server,

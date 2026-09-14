@@ -6,7 +6,7 @@ from harness_workbench.tui import build_parser, create_app
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_ROOT = ROOT / "harness_workbench" / "ui_react"
+UI_ROOT = ROOT / "ui_react"
 
 
 def test_tui_parser_and_optional_app_contract():
@@ -19,7 +19,7 @@ def test_tui_parser_and_optional_app_contract():
 
 
 def test_tui_uses_persistent_session_contract():
-    tui = (ROOT / "harness_workbench" / "tui.py").read_text(encoding="utf-8")
+    tui = (ROOT / "tui.py").read_text(encoding="utf-8")
     assert "/v1/sessions?owner_scope=local" in tui
     assert "/v1/sessions/{self._session_id}/messages" in tui
     assert '"stream": True' in tui
