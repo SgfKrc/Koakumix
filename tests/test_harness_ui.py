@@ -149,7 +149,7 @@ def test_format_rag_result_renders_hits_and_empty():
 
     empty = tui.format_rag_result("q", {"hits": [], "context": {}}, limit=8, backend="b", chunks=0)
     assert "没有命中" in empty
-    assert "/v1/rag/sources" in empty, "空结果时要给出入库线索"
+    assert "入库" in empty, "空结果时要给出去哪里入库的线索"
 
 
 def test_library_panel_can_search():
@@ -183,6 +183,74 @@ def test_library_panel_can_search():
             text = str(app.query_one("#panel-text").content)
             assert "查询「缓存」" in text, "回车应触发检索并回显查询"
             assert "检索失败" in text or "命中" in text
+
+    asyncio.run(scenario())
+
+
+def test_read_source_file_validates_before_ingest(tmp_path):
+    """入库前的本地文件校验（纯函数）：缺失 / 空 / 过大都要给出可读原因。"""
+
+    from harness_workbench import tui
+
+    good = tmp_path / "note.md"
+    good.write_text("# 标题\n正文", encoding="utf-8")
+    title, text = tui.read_source_file(str(good))
+    assert title == "note.md"
+    assert "标题" in text and "正文" in text
+
+    with pytest.raises(ValueError, match="找不到文件"):
+        tui.read_source_file(str(tmp_path / "nope.md"))
+
+    empty = tmp_path / "empty.md"
+    empty.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="文件为空"):
+        tui.read_source_file(str(empty))
+
+    big = tmp_path / "big.md"
+    big.write_text("x" * (tui.MAX_SOURCE_BYTES + 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="文件过大"):
+        tui.read_source_file(str(big))
+
+
+def test_format_add_result_lists_actual_fields():
+    """不硬编码响应字段：把实际键列出来，契约变化时界面上就能看见。"""
+
+    from harness_workbench import tui
+
+    text = tui.format_add_result("/p/a.md", "a.md", "abc", {"source_id": "src_1", "chunks": 3})
+    assert "a.md" in text and "src_1" in text
+    assert "返回字段 : chunks, source_id" in text
+
+
+def test_library_panel_can_ingest(tmp_path):
+    """知识库页应带入库框，回车把本地文件读进来（离线时表现为入库失败，但确实发起了请求）。"""
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    source = tmp_path / "note.md"
+    source.write_text("# 标题\n正文", encoding="utf-8")
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_nav(1)
+            await pilot.pause()
+            assert app.query_one("#rag-add").display is True, "知识库页应有入库框"
+
+            box = app.query_one("#rag-add")
+            box.focus()
+            await pilot.pause()
+            box.value = str(source)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "入库" in str(app.query_one("#panel-text").content)
+
+            app.action_nav(0)
+            await pilot.pause()
+            assert app.query_one("#rag-add").display is False, "对话页不应显示入库框"
 
     asyncio.run(scenario())
 

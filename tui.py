@@ -12,7 +12,8 @@
 
 左栏导航（对话 / 知识库 / 资产 / 运行时）切换主区内容：
 - 对话页：新消息自动滚动到底（否则长会话只看到顶部那截，像"没有回应"）；
-- 知识库页：**可直接检索**（``POST /v1/rag/search``），展示命中与上下文规模。
+- 知识库页：**可检索**（``POST /v1/rag/search``）**可入库**（``POST /v1/rag/sources``，
+  从本地文件读文本）。
 
 启动动画与 ``--no-splash`` / ``--splash-time`` 语义不变；非 TTY 自动跳过。
 """
@@ -24,6 +25,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 DEFAULT_HOST = "http://127.0.0.1:8090"
@@ -38,6 +40,8 @@ NAV_ITEMS: tuple[tuple[str, str], ...] = (
 
 RAG_INDEX_MODES: tuple[str, ...] = ("fts", "keyword", "graph")
 HIT_SNIPPET_CHARS = 240
+# 入库单个文件的上限：防止误指到一个巨大文件把库撑爆。
+MAX_SOURCE_BYTES = 4 * 1024 * 1024
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +69,20 @@ def _request_json(
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             value = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # HTTPError is a URLError subclass, so it must be caught first.  The API reports
+        # failures as {"error": {...}} -- surface that instead of a bare status code.
+        detail = ""
+        try:
+            body = json.loads(exc.read().decode("utf-8"))
+            if isinstance(body, dict):
+                error = body.get("error")
+                if isinstance(error, dict):
+                    detail = str(error.get("message") or error.get("code") or "")
+                detail = detail or str(body.get("detail") or "")
+        except Exception:  # noqa: BLE001 - best effort
+            detail = ""
+        raise RuntimeError(f"HTTP {exc.code}{': ' + detail if detail else ''}") from exc
     except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"harness API unavailable: {exc}") from exc
     if not isinstance(value, dict):
@@ -181,6 +199,7 @@ def _probe(host: str) -> dict[str, Any]:
     return data
 
 
+# --------------------------------------------------------------- pure renderers
 def format_rag_result(query: str, result: dict[str, Any], *, limit: int, backend: str, chunks: int) -> str:
     """Render one ``/v1/rag/search`` response as plain text (pure, testable)."""
 
@@ -192,7 +211,7 @@ def format_rag_result(query: str, result: dict[str, Any], *, limit: int, backend
     lines.append(f"检索模式 : {result.get('index_mode', 'fts')} · 上限 {limit}")
     lines.append("")
     if not hits:
-        lines.append("（没有命中。库为空或关键词不匹配 —— 可先用 POST /v1/rag/sources 添加文档。）")
+        lines.append("（没有命中。库为空或关键词不匹配 —— 可用下方「入库」框先添加文档。）")
     else:
         lines.append(f"命中 {len(hits)} 条：")
         for i, hit in enumerate(hits, 1):
@@ -216,6 +235,53 @@ def format_rag_result(query: str, result: dict[str, Any], *, limit: int, backend
     lines.append("")
     lines.append(f"上下文 : {chars} 字符（由 build_context 截断，供拼进 prompt 用）")
     return "\n".join(lines)
+
+
+def format_add_result(source_ref: str, title: str, text: str, result: dict[str, Any]) -> str:
+    """Render the ``POST /v1/rag/sources`` outcome (pure, testable).
+
+    The response shape is not pinned down here on purpose: the actual keys are listed so a
+    contract change is visible in the UI instead of silently rendering nothing.
+    """
+
+    lines = [
+        "知识库（RAG） · 入库成功",
+        "",
+        f"来源     : {source_ref}",
+        f"标题     : {title}",
+        f"字符数   : {len(text)}",
+    ]
+    if isinstance(result.get("source_id"), str):
+        lines.append(f"源 ID    : {result['source_id']}")
+    for key in ("chunks", "chunk_count", "added", "indexed"):
+        value = result.get(key)
+        if isinstance(value, int):
+            lines.append(f"{key:<8} : {value}")
+    lines.append(f"返回字段 : {', '.join(sorted(str(k) for k in result)) or '(无)'}")
+    lines.append("")
+    lines.append("现在可在「检索」框输入关键词并回车。")
+    return "\n".join(lines)
+
+
+def read_source_file(target: str) -> tuple[str, str]:
+    """Read a text file for ingestion; return ``(title, text)``.
+
+    Raises ``ValueError`` with an actionable message so the panel can show it verbatim.
+    """
+
+    path = Path(target).expanduser()
+    if not path.is_file():
+        raise ValueError(f"找不到文件: {path}")
+    size = path.stat().st_size
+    if size > MAX_SOURCE_BYTES:
+        raise ValueError(f"文件过大: {size} 字节（上限 {MAX_SOURCE_BYTES // 1024} KiB）")
+    if size == 0:
+        raise ValueError(f"文件为空: {path}")
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"读取失败: {exc}") from exc
+    return path.name, text
 
 
 def create_app(
@@ -259,6 +325,7 @@ def create_app(
         #panel-scroll { height: 1fr; }
         #panel-text { height: auto; padding: 1 0; }
         #rag-query { display: none; border: solid #30363d; background: #0d1117; }
+        #rag-add { display: none; border: solid #30363d; background: #0d1117; }
         #composer { dock: bottom; height: 3; border: solid #30363d; background: #0d1117; }
         ListView { height: auto; max-height: 8; background: #161b22; }
         ListItem { padding: 0 1; color: #8b949e; background: #161b22; }
@@ -298,6 +365,7 @@ def create_app(
             self._rag_limit = int(rag_limit)
             self._rag_mode = str(rag_mode)
             self._last_query = ""
+            self._last_source = ""
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -327,6 +395,7 @@ def create_app(
                         with VerticalScroll(id="panel-scroll"):
                             yield Static("", id="panel-text")
                         yield Input(placeholder="检索知识库…（回车执行）", id="rag-query")
+                        yield Input(placeholder="入库：本地文档路径…（回车读取并索引）", id="rag-add")
                     yield Input(placeholder="输入消息，回车发送…", id="composer")
             yield Footer()
 
@@ -425,10 +494,25 @@ def create_app(
             except Exception:  # noqa: BLE001 - container not mounted yet
                 pass
 
-        # ---- panel text ----
         def _set_panel(self, text: str) -> None:
             self.query_one("#panel-text", Static).update(text)
             self._scroll("#panel-scroll")
+
+        def _refresh_rag_health(self) -> None:
+            """Re-read /v1/rag/health so the chunk count reflects what we just ingested."""
+
+            try:
+                rag = _request_json(self._host, "/v1/rag/health")
+            except RuntimeError:
+                return
+            self._boot["rag_raw"] = rag
+            self._boot["rag"] = f"RAG {rag.get('backend', 'unknown')} / {rag.get('chunks', 0)} chunks"
+            try:
+                self.query_one("#utility-status", Static).update(
+                    f"{self._boot['rag']}\n{self._boot.get('image', 'TXT2IMG unknown')}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
         # ---- navigation ----
         def action_nav(self, index: int) -> None:
@@ -442,8 +526,9 @@ def create_app(
             self.query_one("#transcript-scroll").display = chatting
             self.query_one("#composer").display = chatting
             self.query_one("#panel").display = not chatting
-            # 检索框只在知识库页出现（其他面板是只读的）。
+            # 检索/入库框只在知识库页出现（其他面板是只读的）。
             self.query_one("#rag-query").display = self._nav == 1
+            self.query_one("#rag-add").display = self._nav == 1
             self._mark_nav()
             if chatting:
                 return
@@ -464,9 +549,13 @@ def create_app(
                 f"分块总数 : {rag.get('chunks', 0)}\n"
                 f"检索模式 : {self._rag_mode} · 上限 {self._rag_limit}\n"
             )
-            if self._last_query:
-                return head
-            return head + "\n在下方输入框输入关键词并回车即可检索（POST /v1/rag/search）。"
+            if self._last_source:
+                head += f"最近入库 : {self._last_source}\n"
+            return (
+                head + "\n"
+                "· 上面第一个框：关键词检索（POST /v1/rag/search）\n"
+                "· 上面第二个框：填入本地文档路径回车，读入并索引（POST /v1/rag/sources）"
+            )
 
         def _assets_panel(self) -> str:
             image = self._boot.get("image_raw") or {}
@@ -526,6 +615,40 @@ def create_app(
             )
             hits = len([h for h in (result.get("hits") or []) if isinstance(h, dict)])
             status.update(f"ONLINE · 知识库命中 {hits} 条")
+
+        def _add_rag_source(self, target: str) -> None:
+            if not target:
+                self._set_panel(self._library_panel())
+                return
+            status = self.query_one("#status", Static)
+            try:
+                title, text = read_source_file(target)
+            except ValueError as exc:
+                self._set_panel(f"知识库（RAG） · 入库\n\n入库失败：{exc}")
+                status.update("OFFLINE · 入库失败（文件不可用）")
+                return
+            status.update(f"INDEXING · {title}")
+            self._set_panel(f"知识库（RAG） · 入库\n\n正在索引 {title} …")
+            try:
+                result = _request_json(
+                    self._host,
+                    "/v1/rag/sources",
+                    {
+                        "source_ref": str(Path(target).expanduser()),
+                        "title": title,
+                        "text": text,
+                        "owner_scope": "local",
+                    },
+                    timeout=120.0,
+                )
+            except RuntimeError as exc:
+                self._set_panel(f"知识库（RAG） · 入库\n\n入库失败：{exc}")
+                status.update("OFFLINE · 入库失败")
+                return
+            self._last_source = title
+            self._refresh_rag_health()
+            self._set_panel(format_add_result(str(Path(target).expanduser()), title, text, result))
+            status.update(f"ONLINE · 已入库 {title}")
 
         # ---- models ----
         def _render_models(self) -> None:
@@ -625,12 +748,17 @@ def create_app(
                 self.action_nav(0)
             self._set_transcript("KOAKUMIX\n\n等待一条消息。")
 
-        # ---- inputs：检索框与对话框分流 ----
+        # ---- inputs：检索框 / 入库框 / 对话框 分流 ----
         def on_input_submitted(self, event: Input.Submitted) -> None:
+            widget_id = getattr(event.input, "id", None)
             text = event.value.strip()
-            if getattr(event.input, "id", None) == "rag-query":
+            if widget_id == "rag-query":
                 event.input.value = ""
                 self._run_rag_search(text)
+                return
+            if widget_id == "rag-add":
+                event.input.value = ""
+                self._add_rag_source(text)
                 return
             if not text:
                 return
@@ -693,12 +821,15 @@ if __name__ == "__main__":  # pragma: no cover
 
 __all__ = [
     "DEFAULT_HOST",
+    "MAX_SOURCE_BYTES",
     "NAV_ITEMS",
     "QLH_BASE_URL",
     "RAG_INDEX_MODES",
     "build_parser",
     "create_app",
+    "format_add_result",
     "format_rag_result",
     "main",
+    "read_source_file",
     "start_local_backend",
 ]
