@@ -97,11 +97,19 @@ def _capability_map(value: Mapping[str, Any] | None) -> dict[str, CapabilityStat
 
 @dataclass(frozen=True, slots=True)
 class ModelProfile:
-    """All model-specific policy needed before an adapter can run."""
+    """All model-specific policy needed before an adapter can run.
+
+    ``backend`` (the engine that will run the artifact) and ``format`` (the
+    artifact container a manifest proves) are independent fields: one engine can
+    load several formats, and one format can be served by several engines.  The
+    main repo owns the artifact manifest contract; harness profiles mirror its
+    model id / format / revision / sha256 fields so both sides speak one fleet.
+    """
 
     model_id: str
     revision: str
     backend: str
+    format: str = ""
     artifact_sha256: str | None = None
     tokenizer_digest: str | None = None
     chat_template_digest: str | None = None
@@ -121,6 +129,8 @@ class ModelProfile:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ProfileValidationError(f"{name} must be a non-empty string")
+        if not isinstance(self.format, str):
+            raise ProfileValidationError("format must be a string")
         if self.status not in PROFILE_STATUSES:
             raise ProfileValidationError(f"invalid profile status: {self.status}")
         if self.artifact_sha256 is not None and (
@@ -175,6 +185,7 @@ class ModelProfile:
             "model_id": self.model_id,
             "revision": self.revision,
             "backend": self.backend,
+            "format": self.format,
             "artifact_sha256": self.artifact_sha256,
             "tokenizer_digest": self.tokenizer_digest,
             "chat_template_digest": self.chat_template_digest,
@@ -211,6 +222,7 @@ class ModelProfile:
             model_id=value.get("model_id", ""),
             revision=value.get("revision", ""),
             backend=value.get("backend", ""),
+            format=value.get("format", ""),
             artifact_sha256=value.get("artifact_sha256"),
             tokenizer_digest=value.get("tokenizer_digest"),
             chat_template_digest=value.get("chat_template_digest"),
