@@ -10,8 +10,9 @@
 一个内嵌 harness API（复用 :mod:`harness_workbench.desktop` 的装配：QLH 主项目优先，
 否则自起 llama-server）。避免一进来就退化成 FIXTURE 离线态。
 
-左栏导航（对话 / 知识库 / 资产 / 运行时）会切换主区内容；对话页的新消息会自动滚动到底
-（否则长会话只看到顶部那截，看起来像"没有回应"）。
+左栏导航（对话 / 知识库 / 资产 / 运行时）切换主区内容：
+- 对话页：新消息自动滚动到底（否则长会话只看到顶部那截，像"没有回应"）；
+- 知识库页：**可直接检索**（``POST /v1/rag/search``），展示命中与上下文规模。
 
 启动动画与 ``--no-splash`` / ``--splash-time`` 语义不变；非 TTY 自动跳过。
 """
@@ -35,6 +36,9 @@ NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("runtime", "运行时"),
 )
 
+RAG_INDEX_MODES: tuple[str, ...] = ("fts", "keyword", "graph")
+HIT_SNIPPET_CHARS = 240
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Koakumix CLI 工作台")
@@ -44,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-serve", action="store_true", help="不自动拉起后端（只连 --host）")
     parser.add_argument("--no-splash", action="store_true", help="跳过启动动画")
     parser.add_argument("--splash-time", type=float, default=1.0, help="启动动画最小展示秒数（默认 1.0）")
+    parser.add_argument("--rag-limit", type=int, default=8, help="知识库检索返回条数上限（默认 8）")
+    parser.add_argument("--rag-mode", default="fts", choices=RAG_INDEX_MODES, help="知识库检索模式（默认 fts）")
     return parser
 
 
@@ -175,6 +181,43 @@ def _probe(host: str) -> dict[str, Any]:
     return data
 
 
+def format_rag_result(query: str, result: dict[str, Any], *, limit: int, backend: str, chunks: int) -> str:
+    """Render one ``/v1/rag/search`` response as plain text (pure, testable)."""
+
+    hits = [hit for hit in (result.get("hits") or []) if isinstance(hit, dict)]
+    context = result.get("context") or {}
+    lines = [f"知识库（RAG） · 查询「{query}」", ""]
+    lines.append(f"索引后端 : {backend}")
+    lines.append(f"分块总数 : {chunks}")
+    lines.append(f"检索模式 : {result.get('index_mode', 'fts')} · 上限 {limit}")
+    lines.append("")
+    if not hits:
+        lines.append("（没有命中。库为空或关键词不匹配 —— 可先用 POST /v1/rag/sources 添加文档。）")
+    else:
+        lines.append(f"命中 {len(hits)} 条：")
+        for i, hit in enumerate(hits, 1):
+            title = str(hit.get("title") or hit.get("source_id") or "(无标题)")
+            score = hit.get("score")
+            score_text = f"{score:.3f}" if isinstance(score, (int, float)) else "-"
+            extra = ""
+            if isinstance(hit.get("fusion_score"), (int, float)):
+                extra = f" fusion {hit['fusion_score']:.3f}"
+            if isinstance(hit.get("rerank_score"), (int, float)):
+                extra += f" rerank {hit['rerank_score']:.3f}"
+            lines.append("")
+            lines.append(f"{i}. {title}   [score {score_text}{extra}]")
+            lines.append(f"   {hit.get('source_id', '')} / {hit.get('chunk_id', '')}")
+            text = " ".join(str(hit.get("text") or "").split())
+            if text:
+                lines.append(f"   {text[:HIT_SNIPPET_CHARS]}{'…' if len(text) > HIT_SNIPPET_CHARS else ''}")
+    chars = context.get("char_count")
+    if not isinstance(chars, int):
+        chars = len(str(context.get("text") or ""))
+    lines.append("")
+    lines.append(f"上下文 : {chars} 字符（由 build_context 截断，供拼进 prompt 用）")
+    return "\n".join(lines)
+
+
 def create_app(
     *,
     host: str = DEFAULT_HOST,
@@ -184,6 +227,8 @@ def create_app(
     splash: bool = True,
     splash_min: float = 1.0,
     qlh_base_url: str = QLH_BASE_URL,
+    rag_limit: int = 8,
+    rag_mode: str = "fts",
 ) -> Any:
     try:
         from textual.app import App, ComposeResult
@@ -210,7 +255,10 @@ def create_app(
         #banner { color: #bc8cff; height: auto; padding: 0 0 1 0; }
         #transcript-scroll { height: 1fr; border-top: solid #30363d; }
         #transcript { height: auto; padding: 1 0; }
-        #panel { display: none; height: 1fr; border-top: solid #30363d; padding: 1 0; overflow-y: auto; }
+        #panel { display: none; height: 1fr; border-top: solid #30363d; }
+        #panel-scroll { height: 1fr; }
+        #panel-text { height: auto; padding: 1 0; }
+        #rag-query { display: none; border: solid #30363d; background: #0d1117; }
         #composer { dock: bottom; height: 3; border: solid #30363d; background: #0d1117; }
         ListView { height: auto; max-height: 8; background: #161b22; }
         ListItem { padding: 0 1; color: #8b949e; background: #161b22; }
@@ -247,6 +295,9 @@ def create_app(
             self._shell: Any | None = None
             self._nav = 0
             self._boot: dict[str, Any] = {}
+            self._rag_limit = int(rag_limit)
+            self._rag_mode = str(rag_mode)
+            self._last_query = ""
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -272,7 +323,10 @@ def create_app(
                     yield Static("Evangelium vom Himmelsturz.", id="banner")
                     with VerticalScroll(id="transcript-scroll"):
                         yield Static("KOAKUMIX\n\n等待一条消息。", id="transcript")
-                    yield Static("", id="panel")
+                    with Vertical(id="panel"):
+                        with VerticalScroll(id="panel-scroll"):
+                            yield Static("", id="panel-text")
+                        yield Input(placeholder="检索知识库…（回车执行）", id="rag-query")
                     yield Input(placeholder="输入消息，回车发送…", id="composer")
             yield Footer()
 
@@ -359,14 +413,22 @@ def create_app(
             """
 
             self.query_one("#transcript", Static).update(text)
-            try:
-                self.query_one("#transcript-scroll").scroll_end(animate=False)
-            except Exception:  # noqa: BLE001 - container not mounted yet
-                pass
+            self._scroll("#transcript-scroll")
 
         def _transcript_text(self) -> str:
             # Textual 8.x 的 Static 没有 .renderable；正文用官方属性 .content 读回。
             return str(self.query_one("#transcript", Static).content or "")
+
+        def _scroll(self, selector: str) -> None:
+            try:
+                self.query_one(selector).scroll_end(animate=False)
+            except Exception:  # noqa: BLE001 - container not mounted yet
+                pass
+
+        # ---- panel text ----
+        def _set_panel(self, text: str) -> None:
+            self.query_one("#panel-text", Static).update(text)
+            self._scroll("#panel-scroll")
 
         # ---- navigation ----
         def action_nav(self, index: int) -> None:
@@ -374,18 +436,19 @@ def create_app(
             self._render_nav()
 
         def _render_nav(self) -> None:
-            """Switch the main area between the chat view and the read-only panels."""
+            """Switch the main area between the chat view and the info panels."""
 
             chatting = self._nav == 0
             self.query_one("#transcript-scroll").display = chatting
             self.query_one("#composer").display = chatting
-            panel = self.query_one("#panel", Static)
-            panel.display = not chatting
+            self.query_one("#panel").display = not chatting
+            # 检索框只在知识库页出现（其他面板是只读的）。
+            self.query_one("#rag-query").display = self._nav == 1
             self._mark_nav()
             if chatting:
                 return
             builders = (self._library_panel, self._assets_panel, self._runtime_panel)
-            panel.update(builders[self._nav - 1]())
+            self._set_panel(builders[self._nav - 1]())
 
         def _mark_nav(self) -> None:
             view = self.query_one("#nav-list", ListView)
@@ -395,13 +458,15 @@ def create_app(
 
         def _library_panel(self) -> str:
             rag = self._boot.get("rag_raw") or {}
-            return (
+            head = (
                 "知识库（RAG）\n\n"
-                f"后端   : {rag.get('backend', 'unavailable')}\n"
-                f"分块数 : {rag.get('chunks', 0)}\n"
-                f"摘要   : {self._boot.get('rag', 'RAG unavailable')}\n\n"
-                "会话内检索由对话页自动带上下文；此面板只读展示当前索引状态。"
+                f"索引后端 : {rag.get('backend', 'unavailable')}\n"
+                f"分块总数 : {rag.get('chunks', 0)}\n"
+                f"检索模式 : {self._rag_mode} · 上限 {self._rag_limit}\n"
             )
+            if self._last_query:
+                return head
+            return head + "\n在下方输入框输入关键词并回车即可检索（POST /v1/rag/search）。"
 
         def _assets_panel(self) -> str:
             image = self._boot.get("image_raw") or {}
@@ -412,8 +477,7 @@ def create_app(
             if image:
                 rows.append(f"  txt2img  : {bool(image.get('supports_txt2img'))}")
                 rows.append(f"  runtime  : {bool(image.get('runtime_available'))}")
-            lines = "\n".join(rows)
-            return f"资产\n\n{lines}\n\n模型列表在左栏 MODEL 区，选中即可切换。"
+            return "资产\n\n" + "\n".join(rows) + "\n\n模型列表在左栏 MODEL 区，选中即可切换。"
 
         def _runtime_panel(self) -> str:
             return (
@@ -424,6 +488,44 @@ def create_app(
                 f"会话数   : {len(self._sessions)}\n"
                 f"模型数   : {len(self._models)}"
             )
+
+        # ---- knowledge base ----
+        def _run_rag_search(self, query: str) -> None:
+            if not query:
+                self._set_panel(self._library_panel())
+                return
+            status = self.query_one("#status", Static)
+            status.update(f"SEARCHING · {query}")
+            self._set_panel(f"知识库（RAG） · 查询「{query}」\n\n检索中…")
+            try:
+                result = _request_json(
+                    self._host,
+                    "/v1/rag/search",
+                    {
+                        "query": query,
+                        "owner_scope": "local",
+                        "limit": self._rag_limit,
+                        "index_mode": self._rag_mode,
+                    },
+                    timeout=60.0,
+                )
+            except RuntimeError as exc:
+                self._set_panel(f"知识库（RAG） · 查询「{query}」\n\n检索失败: {exc}")
+                status.update("OFFLINE · 知识库检索失败")
+                return
+            rag = self._boot.get("rag_raw") or {}
+            self._last_query = query
+            self._set_panel(
+                format_rag_result(
+                    query,
+                    result,
+                    limit=self._rag_limit,
+                    backend=str(rag.get("backend", "unavailable")),
+                    chunks=int(rag.get("chunks", 0) or 0),
+                )
+            )
+            hits = len([h for h in (result.get("hits") or []) if isinstance(h, dict)])
+            status.update(f"ONLINE · 知识库命中 {hits} 条")
 
         # ---- models ----
         def _render_models(self) -> None:
@@ -523,12 +625,19 @@ def create_app(
                 self.action_nav(0)
             self._set_transcript("KOAKUMIX\n\n等待一条消息。")
 
-        # ---- chat ----
+        # ---- inputs：检索框与对话框分流 ----
         def on_input_submitted(self, event: Input.Submitted) -> None:
             text = event.value.strip()
+            if getattr(event.input, "id", None) == "rag-query":
+                event.input.value = ""
+                self._run_rag_search(text)
+                return
             if not text:
                 return
             event.input.value = ""
+            self._send_chat(text)
+
+        def _send_chat(self, text: str) -> None:
             status = self.query_one("#status", Static)
             status.update("THINKING · 生成中…")
             current = self._transcript_text()
@@ -571,6 +680,8 @@ def main(argv: list[str] | None = None) -> int:
         serve=not args.no_serve,
         splash=not args.no_splash,
         splash_min=args.splash_time,
+        rag_limit=args.rag_limit,
+        rag_mode=args.rag_mode,
     )
     app.run()
     return 0
@@ -584,8 +695,10 @@ __all__ = [
     "DEFAULT_HOST",
     "NAV_ITEMS",
     "QLH_BASE_URL",
+    "RAG_INDEX_MODES",
     "build_parser",
     "create_app",
+    "format_rag_result",
     "main",
     "start_local_backend",
 ]

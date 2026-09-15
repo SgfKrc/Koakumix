@@ -122,16 +122,67 @@ def test_nav_switches_panels_and_back_to_chat():
             assert app.query_one("#transcript-scroll").display is False
             assert app.query_one("#composer").display is False
             assert app.query_one("#panel").display is True
-            assert "知识库" in str(app.query_one("#panel").content)
+            assert "知识库" in str(app.query_one("#panel-text").content)
 
             app.action_nav(3)  # 运行时
             await pilot.pause()
-            assert "运行时" in str(app.query_one("#panel").content)
+            assert "运行时" in str(app.query_one("#panel-text").content)
 
             app.action_nav(0)  # 回到对话
             await pilot.pause()
             assert app.query_one("#transcript-scroll").display is True
             assert app.query_one("#composer").display is True
+
+    asyncio.run(scenario())
+
+
+def test_format_rag_result_renders_hits_and_empty():
+    """知识库检索结果的渲染（纯函数，便于离线验证）。"""
+
+    from harness_workbench import tui
+
+    hit = {"source_id": "d1", "chunk_id": "c1", "title": "标题", "text": "正文", "score": 0.5}
+    text = tui.format_rag_result(
+        "q", {"hits": [hit], "context": {"char_count": 9}}, limit=8, backend="b", chunks=3
+    )
+    assert "标题" in text and "0.500" in text and "d1 / c1" in text and "9 字符" in text
+
+    empty = tui.format_rag_result("q", {"hits": [], "context": {}}, limit=8, backend="b", chunks=0)
+    assert "没有命中" in empty
+    assert "/v1/rag/sources" in empty, "空结果时要给出入库线索"
+
+
+def test_library_panel_can_search():
+    """知识库页此前只是只读 Static；现在应带检索框并把查询打到 /v1/rag/search。"""
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_nav(1)
+            await pilot.pause()
+            assert app.query_one("#panel").display is True
+            assert app.query_one("#rag-query").display is True, "知识库页应有检索框"
+
+            app.action_nav(2)  # 资产页只读，不应出现检索框
+            await pilot.pause()
+            assert app.query_one("#rag-query").display is False
+
+            app.action_nav(1)
+            await pilot.pause()
+            box = app.query_one("#rag-query")
+            box.focus()
+            await pilot.pause()
+            box.value = "缓存"
+            await pilot.press("enter")
+            await pilot.pause()
+            text = str(app.query_one("#panel-text").content)
+            assert "查询「缓存」" in text, "回车应触发检索并回显查询"
+            assert "检索失败" in text or "命中" in text
 
     asyncio.run(scenario())
 
