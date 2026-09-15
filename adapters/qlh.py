@@ -149,6 +149,16 @@ class QLHAdapter:
                         owned_by="qlh",
                         available=bool(row.get("is_available", True)),
                         unavailable_reason=str(row.get("unavailable_reason") or "") or None,
+                        metadata={
+                            "name": row.get("name"),
+                            "format": row.get("model_type"),
+                            "available_formats": list(row.get("available_formats", [])),
+                            "supported_engines": list(row.get("supported_engines", [])),
+                            "preferred_engine": row.get("preferred_engine"),
+                            "max_context": row.get("max_context"),
+                            "recommended_vram_gb": row.get("recommended_vram_gb"),
+                            "profile": dict(row["profile"]) if isinstance(row.get("profile"), Mapping) else None,
+                        },
                     )
                     for row in rows
                     if isinstance(row, Mapping) and str(row.get("model_id") or row.get("id") or "").strip()

@@ -546,6 +546,11 @@ function McpView({ manifest, selectedTool, selectedName, setSelectedName, argume
   </section>;
 }
 
+function profileSectionValue(profile: ModelProfileSummary | undefined, section: 'generation' | 'adaptation' | 'resources', key: string): string {
+  const value = profile?.[section]?.[key];
+  return value === undefined || value === null || value === '' ? 'unknown' : String(value);
+}
+
 function RuntimeView({ connection, backend, models, profiles, presets, downloads, busy, notice, onDownload, onLoad, onRefresh }: {
   connection: ConnectionState;
   backend: string;
@@ -561,6 +566,30 @@ function RuntimeView({ connection, backend, models, profiles, presets, downloads
 }) {
   const activeDownloads = downloads.filter((job) => ['queued', 'downloading', 'verifying', 'registering'].includes(job.status));
   return <section className="utility-view" aria-labelledby="runtime-title">
+    <div className="profile-list" aria-label="model contract summary">
+      {models.map((model) => {
+        const profile = model.metadata?.profile;
+        const engines = model.metadata?.supported_engines?.join(' / ') || 'unknown engines';
+        return <article className="profile-row" key={`contract:${model.id}`}>
+          <div>
+            <strong>{model.id}</strong>
+            <small>{model.metadata?.format || 'unknown format'} / {engines} / preferred {model.metadata?.preferred_engine || 'auto'}</small>
+            <small>{profile ? `template ${profileSectionValue(profile, 'adaptation', 'prompt_family')} / thinking ${profileSectionValue(profile, 'generation', 'thinking')} / vision ${profile?.capabilities?.multimodal?.status || 'unknown'}` : 'profile unavailable'}</small>
+          </div>
+          <span className={`profile-status profile-status--${profile?.status || 'unknown'}`}>{profile?.status || 'unknown'}</span>
+          <small>{profile ? `RAM ${profileSectionValue(profile, 'resources', 'min_ram_gb')} GB / VRAM ${profileSectionValue(profile, 'resources', 'min_vram_gb')} GB` : 'not admitted'}</small>
+        </article>;
+      })}
+      {profiles.map((profile) => <article className="profile-row" key={`profile-contract:${profile.model_id}:${profile.backend}:${profile.revision}`}>
+        <div>
+          <strong>{profile.model_id}</strong>
+          <small>{profile.format || 'unknown format'} / {profile.backend} / {profile.roles.join(' / ')}</small>
+          <small>template {profileSectionValue(profile, 'adaptation', 'prompt_family')} / thinking {profileSectionValue(profile, 'generation', 'thinking')} / vision {profile.capabilities?.multimodal?.status || 'unknown'} / digest {profile.artifact_sha256 ? 'bound' : 'missing'}</small>
+        </div>
+        <span className={`profile-status profile-status--${profile.status}`}>{profile.status}</span>
+        <small>RAM {profileSectionValue(profile, 'resources', 'min_ram_gb')} GB / VRAM {profileSectionValue(profile, 'resources', 'min_vram_gb')} GB</small>
+      </article>)}
+    </div>
     <div className="view-heading"><div><span className="eyebrow">RUNTIME / MODEL ASSETS</span><h1 id="runtime-title">运行时能力</h1><p>Harness 直接消费 QLH 模型目录、预设和下载任务；候选画像仍与已安装运行时分开显示。</p></div><Network size={30} className="heading-icon" /></div>
     <div className="runtime-grid"><div className="runtime-cell"><span className="eyebrow">CONNECTION</span><strong>{connection.toUpperCase()}</strong><small>API healthz</small></div><div className="runtime-cell"><span className="eyebrow">ADAPTER</span><strong>{backend}</strong><small>当前后端</small></div><div className="runtime-cell"><span className="eyebrow">MODEL CATALOG</span><strong>{models.length}</strong><small>可见资产</small></div><div className="runtime-cell"><span className="eyebrow">DOWNLOADS</span><strong>{activeDownloads.length}</strong><small>进行中</small></div></div>
     {notice ? <p className="utility-notice" role="status">{notice}</p> : null}

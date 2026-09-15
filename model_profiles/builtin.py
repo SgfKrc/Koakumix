@@ -34,6 +34,14 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
     qwen3_common = {
         **common,
         "generation": {"temperature": 0.6, "top_p": 0.95, "thinking": "declared"},
+        "resources": {
+            "kv_cache": "unknown",
+            "gpu_layers": "auto",
+            "min_ram_gb": 4.0,
+            "min_vram_gb": 2.0,
+            "min_disk_gb": 3.0,
+            "edge_compatible": True,
+        },
     }
     return (
         ModelProfile(
@@ -55,6 +63,7 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
             model_id="Qwen3-0.6B",
             revision="builtin-qwen3-tool-v1",
             backend="transformers_sidecar",
+            format="both",
             adaptation={
                 "prompt_family": "qwen3_chat_v1",
                 "tool_mode": "sidecar_candidate",
@@ -75,6 +84,7 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
             model_id="Qwen2.5-0.5B",
             revision="builtin-qwen25-0.5b-v1",
             backend="llama_server",
+            format="both",
             context={"n_ctx": 32768, "input_budget": 3072, "max_new_tokens": 512},
             generation={"temperature": 0.7, "top_p": 0.8, "thinking": "unknown"},
             adaptation={
@@ -86,7 +96,15 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
             roles=("answer", "summarizer"),
             aliases=("qwen2.5-0.5b",),
             capabilities=_unknown_capabilities(),
-            evidence={**common["evidence"], "core_model_id": "qwen2.5-0.5b", "probe_ticket": "M-SM-B1"},
+            resources={
+                "kv_cache": "unknown",
+                "gpu_layers": "auto",
+                "min_ram_gb": 3.0,
+                "min_vram_gb": 1.5,
+                "min_disk_gb": 2.0,
+                "edge_compatible": True,
+            },
+            evidence={**common["evidence"], "core_model_id": "qwen2.5-0.5b", "probe_ticket": "M-SM-B1", "artifact_digest_mode": "missing"},
             status="candidate",
             production_eligible=False,
         ),
@@ -94,6 +112,7 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
             model_id="MiniCPM4-0.5B",
             revision="builtin-minicpm4-0.5b-v1",
             backend="llama_server",
+            format="both",
             context={"n_ctx": 32768, "input_budget": 3072, "max_new_tokens": 512},
             generation={"temperature": 0.8, "top_p": 0.8, "thinking": "unknown"},
             adaptation={
@@ -105,7 +124,15 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
             roles=("answer", "summarizer"),
             aliases=("minicpm4-0.5b",),
             capabilities=_unknown_capabilities(),
-            evidence={**common["evidence"], "core_model_id": "minicpm4-0.5b", "probe_ticket": "M-SM-B1"},
+            resources={
+                "kv_cache": "unknown",
+                "gpu_layers": "auto",
+                "min_ram_gb": 3.0,
+                "min_vram_gb": 1.5,
+                "min_disk_gb": 3.0,
+                "edge_compatible": True,
+            },
+            evidence={**common["evidence"], "core_model_id": "minicpm4-0.5b", "probe_ticket": "M-SM-B1", "artifact_digest_mode": "missing"},
             status="candidate",
             production_eligible=False,
         ),
@@ -113,6 +140,7 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
             model_id="DistilQwen2.5-DS3-0324-7B",
             revision="builtin-distilqwen-ds3-0324-v1",
             backend="llama_server",
+            format="both",
             context={"n_ctx": 32768, "input_budget": 8192, "max_new_tokens": 1024},
             generation={"temperature": 0.7, "top_p": 0.8, "thinking": "unknown"},
             adaptation={
@@ -124,7 +152,15 @@ def builtin_profiles() -> tuple[ModelProfile, ...]:
             roles=("answer", "summarizer"),
             aliases=("distilqwen25-ds3-0324-7b",),
             capabilities=_unknown_capabilities(),
-            evidence={**common["evidence"], "core_model_id": "distilqwen25-ds3-0324-7b", "probe_ticket": "DSW-D1"},
+            resources={
+                "kv_cache": "unknown",
+                "gpu_layers": "auto",
+                "min_ram_gb": 12.0,
+                "min_vram_gb": 8.0,
+                "min_disk_gb": 20.0,
+                "edge_compatible": False,
+            },
+            evidence={**common["evidence"], "core_model_id": "distilqwen25-ds3-0324-7b", "probe_ticket": "DSW-D1", "artifact_digest_mode": "missing"},
             status="candidate",
             production_eligible=False,
         ),

@@ -31,6 +31,17 @@ class _FakeQLHTransport:
                         "model_id": "Qwen2.5-0.5B",
                         "is_available": False,
                         "unavailable_reason": "download_required",
+                        "model_type": "both",
+                        "available_formats": ["safetensors", "gguf"],
+                        "supported_engines": ["llama_cpp", "pytorch"],
+                        "preferred_engine": "pytorch",
+                        "max_context": 32768,
+                        "profile": {
+                            "profile_schema": "qlh.harness.model_profile.v1",
+                            "model_id": "qwen2.5-0.5b",
+                            "format": "both",
+                            "status": "candidate",
+                        },
                     }
                 ]
             }
@@ -105,6 +116,10 @@ def test_qlh_adapter_exposes_model_assets_downloads_and_load():
     models = adapter.models()
     assert models[0].id == "Qwen2.5-0.5B"
     assert models[0].available is False
+    assert models[0].metadata["format"] == "both"
+    assert models[0].metadata["supported_engines"] == ["llama_cpp", "pytorch"]
+    assert models[0].metadata["profile"]["status"] == "candidate"
+    assert models[0].as_dict()["metadata"]["profile"]["format"] == "both"
     assert adapter.model_presets()["presets"][0]["id"] == "qwen2.5-0.5b"
     assert adapter.queue_model_download("qwen2.5-0.5b")["job"]["status"] == "queued"
     assert adapter.load_model_asset("Qwen2.5-0.5B")["loaded"] is True

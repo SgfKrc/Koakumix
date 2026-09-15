@@ -62,6 +62,38 @@ export interface ImageResult {
   metadata?: Record<string, unknown>;
 }
 
+export interface ModelProfileSummary {
+  profile_schema?: string;
+  model_id: string;
+  revision: string;
+  backend: string;
+  format?: string;
+  artifact_sha256?: string | null;
+  tokenizer_digest?: string | null;
+  chat_template_digest?: string | null;
+  roles: string[];
+  aliases?: string[];
+  status: string;
+  production_eligible: boolean;
+  context: Record<string, unknown>;
+  generation: Record<string, unknown>;
+  adaptation: Record<string, unknown>;
+  resources: Record<string, unknown>;
+  capabilities: Record<string, { status: string; evidence: string[] }>;
+  evidence: Record<string, unknown>;
+}
+
+export interface ModelCatalogMetadata {
+  name?: string;
+  format?: string;
+  available_formats?: string[];
+  supported_engines?: string[];
+  preferred_engine?: string;
+  max_context?: number;
+  recommended_vram_gb?: number;
+  profile?: ModelProfileSummary;
+}
+
 export interface HarnessModel {
   id: string;
   object?: string;
@@ -69,6 +101,7 @@ export interface HarnessModel {
   created?: number;
   available?: boolean;
   unavailable_reason?: string;
+  metadata?: ModelCatalogMetadata;
 }
 
 export interface HarnessModelPreset {
@@ -91,21 +124,6 @@ export interface HarnessModelDownload {
   preset_id?: string;
   error?: string | null;
   error_code?: string | null;
-}
-
-export interface ModelProfileSummary {
-  model_id: string;
-  revision: string;
-  backend: string;
-  roles: string[];
-  aliases?: string[];
-  status: string;
-  production_eligible: boolean;
-  context: Record<string, unknown>;
-  generation: Record<string, unknown>;
-  adaptation: Record<string, unknown>;
-  capabilities: Record<string, { status: string; evidence: string[] }>;
-  evidence: Record<string, unknown>;
 }
 
 export class HarnessApiError extends Error {

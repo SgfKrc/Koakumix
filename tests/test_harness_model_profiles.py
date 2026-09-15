@@ -77,6 +77,16 @@ def test_builtin_profiles_are_conservative_candidates() -> None:
     assert by_id["Qwen2.5-0.5B"].adaptation["prompt_family"] == "qwen_chat_v1"
     assert by_id["MiniCPM4-0.5B"].adaptation["prompt_family"] == "minicpm4_chat_v1"
     assert by_id["DistilQwen2.5-DS3-0324-7B"].context["max_new_tokens"] == 1024
+    assert all(by_id[model_id].format == "both" for model_id in (
+        "Qwen3-0.6B",
+        "Qwen2.5-0.5B",
+        "MiniCPM4-0.5B",
+        "DistilQwen2.5-DS3-0324-7B",
+    ))
+    assert by_id["Qwen3-0.6B"].generation["thinking"] == "declared"
+    assert by_id["MiniCPM4-0.5B"].resources["min_vram_gb"] == 1.5
+    assert by_id["DistilQwen2.5-DS3-0324-7B"].resources["min_disk_gb"] == 20.0
+    assert by_id["Qwen2.5-0.5B"].artifact_sha256 is None
 
 
 def test_profile_round_trip_and_digest_rejects_tampering() -> None:
