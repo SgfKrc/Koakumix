@@ -15,7 +15,27 @@ def test_tui_parser_and_optional_app_contract():
     assert args.model == "QW1.8B"
     pytest.importorskip("textual")
     app = create_app(host=args.host, model=args.model)
-    assert app.TITLE == "QLH Harness Workbench"
+    assert app.TITLE == "KOAKUMIX"
+    assert app.SUB_TITLE == "血祭血神，颅献颅座"
+
+
+def test_tui_splash_controls_and_khorne_theme():
+    """恐虐主题与启动动画开关都属于 CLI 契约。"""
+
+    defaults = build_parser().parse_args([])
+    assert defaults.no_splash is False
+    assert defaults.splash_time == pytest.approx(1.0)
+
+    off = build_parser().parse_args(["--no-splash", "--splash-time", "0.2"])
+    assert off.no_splash is True
+    assert off.splash_time == pytest.approx(0.2)
+
+    from harness_workbench import splash
+
+    assert splash.COLOR_TOP == "#0a0607"     # 黑底
+    assert splash.COLOR_BOTTOM == "#8b1a1a"  # 血红填充
+    assert splash.COLOR_SCAN == "#e8b923"    # 金色扫描线
+    assert splash.COLOR_EDGE == "#f2ece4"    # 白色描边
 
 
 def test_tui_uses_persistent_session_contract():

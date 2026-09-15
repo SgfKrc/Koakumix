@@ -139,7 +139,17 @@ def test_pick_free_port_returns_a_usable_port():
     assert 1 <= port <= 65535
 
 
-def test_build_adapter_requires_a_model():
+def test_build_adapter_requires_a_model(monkeypatch):
+    """Falling back to the bundled llama-server still demands a model.
+
+    The probe is stubbed: without that, this test would depend on whether a real QLH API
+    happens to be listening on port 8000 -- an environment fact, not a property of the
+    code under test.
+    """
+
+    from harness_workbench import desktop as desktop_module
+
+    monkeypatch.setattr(desktop_module, "probe_qlh_api", lambda *_args, **_kwargs: False)
     shell = DesktopShell(DesktopShellConfig(extra={}))
 
     with pytest.raises(DesktopShellError) as excinfo:
@@ -153,6 +163,11 @@ def test_build_adapter_maps_options_and_starts_the_process(tmp_path, monkeypatch
     (no ``llama-server`` process, nothing on 8080)."""
 
     import harness_workbench.adapters as adapters
+    from harness_workbench import desktop as desktop_module
+
+    # Stub the probe: otherwise a real QLH API on port 8000 would take the qlh branch and
+    # this test would stop exercising the llama-server path it exists to guard.
+    monkeypatch.setattr(desktop_module, "probe_qlh_api", lambda *_args, **_kwargs: False)
 
     events: list[str] = []
 
