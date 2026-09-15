@@ -246,6 +246,18 @@ def _evaluate(policy: JudgePolicy, accepted: Sequence[str], output: str | None, 
     return JudgeDecision("passed" if passed else "failed", passed, "accepted_match" if passed else "accepted_match_missing")
 
 
+def evaluate_completion(
+    policy: JudgePolicy,
+    accepted: Sequence[str],
+    output: str | None,
+    *,
+    truncated: bool = False,
+) -> JudgeDecision:
+    """Public single-completion judge so every tool shares one policy implementation."""
+
+    return _evaluate(policy, accepted, output, truncated=truncated)
+
+
 def _outcome(v1: JudgeDecision, v2: JudgeDecision) -> str:
     if v1.passed is None or v2.passed is None:
         return "invalid"
@@ -430,6 +442,7 @@ __all__ = [
     "V1_POLICY",
     "V2_POLICY",
     "builtin_judge_policy_fixture",
+    "evaluate_completion",
     "load_judge_rubric",
     "run_judge_policy_diff",
 ]
