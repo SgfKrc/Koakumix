@@ -40,7 +40,11 @@ from .api_layer import create_app
 # `desktop.py` lives at the package root, which *is* the repository root.
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_DIST = REPO_ROOT / "ui_react" / "dist"
+# pywebview on Windows hands the icon to .NET ``System.Drawing.Icon``, which accepts
+# **only .ico** files — a PNG raises "not a valid image for Icon" at window creation.
+# Ship both: prefer the .ico for the window, keep the PNG for other backends and docs.
 DEFAULT_ICON = REPO_ROOT / "assets" / "Koakumix.png"
+DEFAULT_ICON_ICO = REPO_ROOT / "assets" / "Koakumix.ico"
 DEFAULT_TITLE = "Koakumix"
 SHELL_SCHEMA = "qlh.koakumix.desktop_shell.v1"
 
@@ -69,8 +73,20 @@ class DesktopShellConfig:
         return Path(self.dist_dir).expanduser() if self.dist_dir else DEFAULT_DIST
 
     def resolved_icon(self) -> Path | None:
-        path = Path(self.icon).expanduser() if self.icon else DEFAULT_ICON
-        return path if path.is_file() else None
+        """Return the window icon, preferring the ``.ico`` that Windows/.NET requires.
+
+        An explicitly supplied ``icon`` is honoured as given (use ``.ico`` on Windows);
+        the default path prefers ``Koakumix.ico`` and falls back to the PNG so other
+        backends — and the documentation — keep working off the same asset.
+        """
+
+        if self.icon:
+            explicit = Path(self.icon).expanduser()
+            return explicit if explicit.is_file() else None
+        for candidate in (DEFAULT_ICON_ICO, DEFAULT_ICON):
+            if candidate.is_file():
+                return candidate
+        return None
 
 
 def frontend_status(config: DesktopShellConfig) -> dict[str, Any]:
@@ -154,13 +170,17 @@ class DesktopShell:
         return app
 
     def build_adapter(self) -> Any:
-        """Construct (but do not start) the llama-server adapter, as ``cli.py`` does.
+        """Construct **and start** the llama-server adapter, mirroring ``cli.py``.
 
         ``config.extra`` may carry ``model`` (**required**), ``executable``,
         ``llama_host`` / ``llama_port``, ``context_size``, ``max_new_tokens``,
         ``mmproj``, ``enable_jinja`` and ``cache_prompt``.  A missing model is
         refused here with an actionable code instead of surfacing a confusing
         failure from inside the API layer.
+
+        Starting is part of building: a constructed-but-unstarted adapter leaves the
+        window pointing at an API whose chat backend is not listening — a real launch
+        run caught exactly that (no ``llama-server`` process, nothing on 8080).
         """
 
         options = dict(self.config.extra)
@@ -183,8 +203,10 @@ class DesktopShell:
             enable_jinja=bool(options.get("enable_jinja", True)),
             cache_prompt=bool(options.get("cache_prompt", True)),
         )
-        self._adapter = LlamaServerAdapter(server_config, process=LlamaServerProcess(server_config))
-        return self._adapter
+        adapter = LlamaServerAdapter(server_config, process=LlamaServerProcess(server_config))
+        adapter.start()
+        self._adapter = adapter
+        return adapter
 
     def _build_adapter(self) -> Any:
         return self._adapter or self.build_adapter()
@@ -277,6 +299,13 @@ class DesktopShell:
 
         if self.config.open_window:
             require_frontend(self.config)
+            # Windows: taskbar identity, so the window is grouped/labelled as Koakumix
+            # instead of falling back to the host interpreter's icon and name.
+            if sys.platform == "win32":
+                with contextlib.suppress(Exception):
+                    import ctypes  # noqa: PLC0415
+
+                    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Koakumix")
         url = self.start_server()
         if not self.config.open_window:
             return url
@@ -291,6 +320,8 @@ class DesktopShell:
         )
         start_kwargs: dict[str, Any] = {}
         if icon is not None:
+            # Must be an .ico on Windows: pywebview hands it to .NET System.Drawing.Icon,
+            # which rejects PNGs with "not a valid image for Icon".
             start_kwargs["icon"] = str(icon)
         try:
             webview.start(**start_kwargs)

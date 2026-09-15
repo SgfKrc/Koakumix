@@ -80,6 +80,41 @@ def test_default_paths_point_inside_this_repository():
     assert DesktopShellConfig().resolved_icon() is not None
 
 
+def test_window_icon_prefers_the_ico_that_windows_requires():
+    """A real window launch caught this: pywebview hands the icon to .NET
+    ``System.Drawing.Icon``, which raises "not a valid image for Icon" on a PNG.
+    The default must therefore be an existing .ico, and an explicit icon must win."""
+
+    from harness_workbench.desktop import DEFAULT_ICON_ICO
+
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    assert DEFAULT_ICON_ICO == repo / "assets" / "Koakumix.ico"
+    assert DEFAULT_ICON_ICO.is_file(), "ship the .ico next to the PNG; Windows needs it"
+    assert DEFAULT_ICON_ICO.suffix == ".ico"
+    # Default resolution must pick the .ico, not the PNG.
+    assert DesktopShellConfig().resolved_icon() == DEFAULT_ICON_ICO
+    # An explicit icon is honoured as given (and a missing one is still not fatal).
+    assert DesktopShellConfig(icon=str(DEFAULT_ICON)).resolved_icon() == DEFAULT_ICON
+    assert DesktopShellConfig(icon=str(repo / "nope.ico")).resolved_icon() is None
+
+
+def test_frontend_build_uses_relative_asset_urls():
+    """A real window launch showed a blank workbench: the built ``index.html``
+    referenced ``/assets/…`` absolutely, which 404s because the shell mounts the dist
+    at ``/app``.  Vite must therefore build with ``base: './'``."""
+
+    import re
+
+    index = pathlib.Path(__file__).resolve().parents[1] / "ui_react" / "dist" / "index.html"
+    if not index.is_file():
+        pytest.skip("frontend build not present")
+    html = index.read_text(encoding="utf-8")
+    urls = re.findall(r'(?:src|href)="([^"]+)"', html)
+    assert urls, "expected at least one asset reference in the built index.html"
+    absolute = [url for url in urls if url.startswith("/")]
+    assert not absolute, f"asset URLs must be relative to work under /app, got {absolute}"
+
+
 def test_icon_resolution_is_optional_not_fatal(tmp_path):
     missing = DesktopShellConfig(icon=tmp_path / "nope.png")
     assert missing.resolved_icon() is None  # no icon is a graceful state
@@ -112,7 +147,33 @@ def test_build_adapter_requires_a_model():
     assert excinfo.value.code == "model_not_configured"
 
 
-def test_build_adapter_maps_options_without_starting_anything(tmp_path):
+def test_build_adapter_maps_options_and_starts_the_process(tmp_path, monkeypatch):
+    """A real launch caught the bug this guards: the adapter was constructed but never
+    started, so the window pointed at an API whose chat backend was not listening
+    (no ``llama-server`` process, nothing on 8080)."""
+
+    import harness_workbench.adapters as adapters
+
+    events: list[str] = []
+
+    class _FakeProcess:
+        def __init__(self, config):
+            self.config = config
+
+    class _FakeAdapter:
+        def __init__(self, config, *, process):
+            self.config = config
+            self.process = process
+
+        def start(self):
+            events.append("start")
+
+        def close(self):
+            events.append("close")
+
+    monkeypatch.setattr(adapters, "LlamaServerProcess", _FakeProcess)
+    monkeypatch.setattr(adapters, "LlamaServerAdapter", _FakeAdapter)
+
     model = tmp_path / "model.gguf"
     model.write_bytes(b"gguf")
     shell = DesktopShell(
@@ -130,16 +191,15 @@ def test_build_adapter_maps_options_without_starting_anything(tmp_path):
 
     adapter = shell.build_adapter()
 
-    # Constructed, never started: no process is launched by this call.
     assert adapter is shell._adapter
-    server_config = getattr(adapter, "config", None)
-    assert server_config is not None, "adapter should expose its llama-server config"
-    assert server_config.port == 8123
-    assert server_config.context_size == 2048
-    assert pathlib.Path(str(server_config.model)).name == "model.gguf"
+    assert events == ["start"], "the adapter must be started, not merely constructed"
+    assert adapter.config.port == 8123
+    assert adapter.config.context_size == 2048
+    assert pathlib.Path(str(adapter.config.model)).name == "model.gguf"
 
     shell.shutdown_adapter()
     assert shell._adapter is None
+    assert events == ["start", "close"]
 
 
 def test_shutdown_is_safe_before_start():
