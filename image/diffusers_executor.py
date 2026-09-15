@@ -15,7 +15,12 @@ Design boundaries:
   available, else cpu) and recorded on every result, so evidence never claims a
   GPU run that did not happen;
 * weights come from the verified local asset directory only.  Nothing is
-  downloaded here, and a missing/unverified asset stays a hard error.
+  downloaded here, and a missing/unverified asset stays a hard error;
+* **weight variant** (``model.fp16.safetensors``) is detected from the asset
+  itself.  Community SD packages ship fp16-only weights under that name, which
+  diffusers loads only when ``variant="fp16"`` is passed explicitly -- a real
+  machine run showed the plain call failing with "no file named
+  model.safetensors found in .../text_encoder".
 """
 
 from __future__ import annotations
@@ -32,7 +37,39 @@ from .manifest import AssetManifest
 
 DEVICE_CHOICES = ("auto", "cuda", "cpu")
 DTYPE_CHOICES = ("float16", "float32")
+VARIANT_CHOICES = ("auto", "fp16", "fp32", "none")
 EXECUTOR_SCHEMA = "qlh.harness.diffusers_executor.v1"
+
+#: Filenames diffusers accepts when no variant is named (per component folder).
+_PLAIN_WEIGHT_NAMES = (
+    "model.safetensors",  # text_encoder / vae / safety_checker
+    "diffusion_pytorch_model.safetensors",  # unet / vae
+    "pytorch_model.bin",
+)
+_FP16_VARIANT_GLOB = "*.fp16.safetensors"
+
+
+def detect_weight_variant(asset_root: Path | str) -> str | None:
+    """Return ``"fp16"`` when the asset only ships fp16-named weights.
+
+    A plain ``from_pretrained`` call looks for ``model.safetensors`` /
+    ``pytorch_model.bin``; community SD packages often keep
+    ``model.fp16.safetensors`` instead and require ``variant="fp16"``.
+    """
+
+    root = Path(asset_root)
+    try:
+        if not root.is_dir():
+            return None
+    except OSError:  # pragma: no cover - filesystem dependent
+        return None
+    has_fp16 = any(root.rglob(_FP16_VARIANT_GLOB))
+    if not has_fp16:
+        return None
+    for name in _PLAIN_WEIGHT_NAMES:
+        if any(root.rglob(name)):
+            return None  # both spellings exist: the plain call already works
+    return "fp16"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +79,7 @@ class DiffusersExecutorConfig:
     asset_root: Path | str
     device: str = "auto"
     dtype: str = "float16"
+    variant: str = "auto"
     enable_attention_slicing: bool = True
     pipeline_factory: Callable[..., Any] | None = None
 
@@ -50,6 +88,8 @@ class DiffusersExecutorConfig:
             raise ValueError(f"device must be one of: {', '.join(DEVICE_CHOICES)}")
         if self.dtype not in DTYPE_CHOICES:
             raise ValueError(f"dtype must be one of: {', '.join(DTYPE_CHOICES)}")
+        if self.variant not in VARIANT_CHOICES:
+            raise ValueError(f"variant must be one of: {', '.join(VARIANT_CHOICES)}")
         if not str(self.asset_root).strip():
             raise ValueError("asset_root is required")
 
@@ -78,6 +118,7 @@ class DiffusersImageExecutor:
         self._load_lock = threading.Lock()
         self._pipeline: Any | None = None
         self._resolved_device: str | None = None
+        self._resolved_variant: str | None = None
         self._closed = False
         self._load_count = 0
         self._generation_count = 0
@@ -100,6 +141,7 @@ class DiffusersImageExecutor:
             "kind": "diffusers",
             "device": self._resolved_device or self.config.device,
             "dtype": self.config.dtype,
+            "variant": self._resolved_variant or self.config.variant,
             "loaded": self.loaded,
             "closed": self._closed,
             "load_count": self._load_count,
@@ -113,9 +155,13 @@ class DiffusersImageExecutor:
         try:
             import torch  # noqa: PLC0415 - deliberately lazy
             from diffusers import StableDiffusionPipeline  # noqa: PLC0415
-        except ImportError as exc:  # pragma: no cover - environment dependent
+        except Exception as exc:
+            # A broken pairing (e.g. diffusers 0.40 with huggingface-hub 1.x)
+            # raises RuntimeError from diffusers' own import guard, not
+            # ImportError.  Either way the runtime is unusable: fail closed with
+            # one stable code instead of leaking the library's own exception.
             raise ImageAdapterError(
-                "diffusers/torch are not installed in this environment",
+                "diffusers/torch are not usable in this environment: " + str(exc)[:200],
                 code="local_image_runtime_unavailable",
                 status_code=503,
             ) from exc
@@ -137,6 +183,16 @@ class DiffusersImageExecutor:
             return "cpu"
         return "cuda" if torch.cuda.is_available() else "cpu"
 
+    def _resolve_variant(self) -> str | None:
+        """Resolve ``auto`` by inspecting the asset's weight filenames."""
+
+        choice = self.config.variant
+        if choice == "auto":
+            return detect_weight_variant(self.config.asset_root)
+        if choice == "none":
+            return None
+        return choice
+
     # ---------------------------------------------------------------- loading
 
     def _load_pipeline(self, device: str) -> Any:
@@ -147,10 +203,11 @@ class DiffusersImageExecutor:
                 )
             if self._pipeline is not None:
                 return self._pipeline
+            variant = self._resolve_variant()
             if self.config.pipeline_factory is not None:
                 # Injected factory (tests / alternate runtimes) skips the import.
                 self._pipeline = self.config.pipeline_factory(
-                    str(self.config.asset_root), device=device, dtype=self.config.dtype
+                    str(self.config.asset_root), device=device, dtype=self.config.dtype, variant=variant
                 )
             else:
                 torch, pipeline_class = self._require_runtime()
@@ -158,11 +215,12 @@ class DiffusersImageExecutor:
                 if device == "cpu" and dtype is torch.float16:
                     # fp16 on CPU is either unsupported or pathologically slow.
                     dtype = torch.float32
+                kwargs: dict[str, Any] = {"torch_dtype": dtype, "local_files_only": True}
+                if variant is not None:
+                    kwargs["variant"] = variant
                 try:
                     self._pipeline = pipeline_class.from_pretrained(
-                        str(self.config.asset_root),
-                        torch_dtype=dtype,
-                        local_files_only=True,
+                        str(self.config.asset_root), **kwargs
                     )
                 except Exception as exc:
                     raise ImageAdapterError(
@@ -181,6 +239,7 @@ class DiffusersImageExecutor:
             if callable(move):
                 move(device)
             self._resolved_device = device
+            self._resolved_variant = variant
             self._load_count += 1
             return self._pipeline
 
@@ -216,7 +275,9 @@ class DiffusersImageExecutor:
                     status_code=502,
                 ) from exc
             self._generation_count += 1
-            return self._encode(result, request, manifest, device)
+            return self._encode(
+                result, request, manifest, device, self._resolved_variant
+            )
 
     def _invoke(self, pipeline: Any, request: ImageRequest, torch: Any | None, device: str) -> Any:
         kwargs: dict[str, Any] = {
@@ -233,7 +294,13 @@ class DiffusersImageExecutor:
         return pipeline(**kwargs)
 
     @staticmethod
-    def _encode(result: Any, request: ImageRequest, manifest: AssetManifest, device: str) -> GeneratedImage:
+    def _encode(
+        result: Any,
+        request: ImageRequest,
+        manifest: AssetManifest,
+        device: str,
+        variant: str | None,
+    ) -> GeneratedImage:
         images = getattr(result, "images", None)
         if not isinstance(images, (list, tuple)) or not images:
             raise ImageAdapterError(
@@ -263,6 +330,7 @@ class DiffusersImageExecutor:
             metadata={
                 "executor_schema": EXECUTOR_SCHEMA,
                 "device": device,
+                "weight_variant": variant,
                 "asset_id": manifest.asset_id,
                 "artifact_id": manifest.artifact_id,
                 "steps": request.steps,
@@ -315,8 +383,10 @@ def executor_evidence(executor: DiffusersImageExecutor | None) -> Mapping[str, A
 __all__ = [
     "DEVICE_CHOICES",
     "DTYPE_CHOICES",
+    "VARIANT_CHOICES",
     "DiffusersExecutorConfig",
     "DiffusersImageExecutor",
+    "detect_weight_variant",
     "diffusers_available",
     "executor_evidence",
 ]

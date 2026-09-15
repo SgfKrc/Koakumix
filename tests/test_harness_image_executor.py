@@ -27,6 +27,7 @@ from harness_workbench.image import (
     ImageAdapterError,
     ImageRequest,
     build_local_image_engine,
+    detect_weight_variant,
     diffusers_available,
 )
 from harness_workbench.image.diffusers_executor import EXECUTOR_SCHEMA
@@ -65,8 +66,9 @@ class _FakePipeline:
 
 
 def _factory(pipeline: _FakePipeline):
-    def make(root: str, *, device: str, dtype: str):
+    def make(root: str, *, device: str, dtype: str, variant=None):
         pipeline.loaded_for = (root, device, dtype)  # type: ignore[attr-defined]
+        pipeline.loaded_variant = variant  # type: ignore[attr-defined]
         return pipeline
 
     return make
@@ -315,3 +317,51 @@ def test_engine_from_assembly_still_verifies_before_generating() -> None:
     with pytest.raises(ImageAdapterError) as excinfo:
         assembly.engine.generate(_request())
     assert excinfo.value.code in {"asset_manifest_invalid"}
+
+
+def test_weight_variant_is_detected_from_fp16_only_assets(tmp_path) -> None:
+    """Community SD packages ship ``model.fp16.safetensors``; diffusers needs variant="fp16"."""
+
+    fp16_only = tmp_path / "fp16-only"
+    (fp16_only / "text_encoder").mkdir(parents=True)
+    (fp16_only / "text_encoder" / "model.fp16.safetensors").write_bytes(b"x")
+    assert detect_weight_variant(fp16_only) == "fp16"
+
+    both = tmp_path / "both"
+    (both / "unet").mkdir(parents=True)
+    (both / "unet" / "diffusion_pytorch_model.fp16.safetensors").write_bytes(b"x")
+    (both / "unet" / "diffusion_pytorch_model.safetensors").write_bytes(b"x")
+    # Both spellings exist: the plain call already works, so no variant is needed.
+    assert detect_weight_variant(both) is None
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert detect_weight_variant(plain) is None
+    assert detect_weight_variant(tmp_path / "missing") is None
+
+
+def test_variant_reaches_the_pipeline_factory_and_the_result_metadata() -> None:
+    pipeline = _FakePipeline()
+    executor = _executor(pipeline, variant="fp16")
+
+    image = executor.generate(_request(), _manifest())
+
+    assert pipeline.loaded_variant == "fp16"
+    assert image.metadata["weight_variant"] == "fp16"
+    assert executor.status()["variant"] == "fp16"
+
+
+def test_auto_variant_stays_unset_for_an_unreadable_asset() -> None:
+    pipeline = _FakePipeline()
+    executor = _executor(pipeline, variant="auto")
+
+    image = executor.generate(_request(), _manifest())
+
+    # /tmp/sd15-fixture does not exist, so nothing can be detected: no variant.
+    assert pipeline.loaded_variant is None
+    assert image.metadata["weight_variant"] is None
+
+
+def test_variant_choice_is_validated() -> None:
+    with pytest.raises(ValueError, match="variant"):
+        DiffusersExecutorConfig(asset_root="/tmp/x", variant="bf16")
