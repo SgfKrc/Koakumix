@@ -492,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
     parser.add_argument("--backend", default=BACKEND_QLH, choices=BACKENDS, help="chat backend: qlh (main-project API, full model surface) or llama (bundled llama-server)")
     parser.add_argument("--qlh-base-url", default=DEFAULT_QLH_BASE_URL, help=f"QLH main-project API base URL (default {DEFAULT_QLH_BASE_URL})")
-    parser.add_argument("--data-dir", default=None, help="where sessions/memory/RAG/images live (default %LOCALAPPDATA%\\Koakumix)")
+    parser.add_argument("--data-dir", default=None, help="where sessions/memory/RAG/images live (default %%LOCALAPPDATA%%\\Koakumix)")
     parser.add_argument("--dist", default=None, help="frontend dist directory (default ui_react/dist)")
     parser.add_argument("--icon", default=None, help="window icon (default assets/Koakumix.ico)")
     parser.add_argument("--print-url", action="store_true", help="start without opening a window and print the URL")

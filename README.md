@@ -45,11 +45,31 @@ python -m harness_workbench.mcp_server
 桌面壳（pywebview）：
 
 ```bash
-cd ui_react && npm install && npm run build   # 先构建前端（dist 不入库）
-pip install -e ".[desktop]"                    # 可选依赖：pywebview + fastapi + uvicorn
-koakumix-desktop --check                       # 就绪自检（不开窗口、不需要模型）
-koakumix-desktop --model path/to/model.gguf    # 起本地 API 并打开桌面窗口
+cd ui_react && npm install && npm run build    # 先构建前端（dist 不入库）
+pip install -e ".[desktop]"                     # 可选依赖：pywebview + fastapi + uvicorn
 ```
+
+手动启动（三种任选）：
+
+```bash
+# 1) 双击本文件，或从任意目录调用；它自行切到仓库根并选用 .venv-test：
+koakumix-desktop.cmd
+
+# 2) 从仓库根以模块方式启动（最稳，不依赖安装状态）：
+python -m harness_workbench.desktop --model models/qwen3-0.6b-q8_0.gguf
+
+# 3) editable 安装成功后的入口脚本（任意目录可用）：
+koakumix-desktop --check                        # 就绪自检（不开窗、不需要模型）
+koakumix-desktop --model path/to/model.gguf     # 起本地 API 并打开桌面窗口
+```
+
+后端形态（默认自动选择）：
+
+- `--backend qlh`（默认）：先探测 `--qlh-base-url`（默认 `http://127.0.0.1:8090`）上的 QLH 主项目 API；通则直连，模型选择 / 加载 / 设备画像面板因此有数据。
+- 探测失败则**自动回退**自起 llama-server（需 `--model`），工作台仍能打开，但只有 chat 与对话相关能力。
+- `--backend llama` 可强制走回退路径。
+
+数据（会话 / 记忆 / RAG / 图片）默认落在 `%LOCALAPPDATA%\Koakumix`，可用 `--data-dir` 覆盖。
 
 ## 测试
 

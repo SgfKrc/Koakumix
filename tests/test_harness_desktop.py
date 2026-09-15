@@ -377,3 +377,16 @@ def test_build_dependencies_wires_the_stores_the_ui_asked_for(tmp_path):
     assert created.session_id
     listed = deps["session_store"].list(owner_scope="local", limit=5)
     assert created.session_id in {item.session_id for item in listed}
+
+
+def test_help_renders_without_crashing(capsys):
+    """A stray ``%`` in a help string made ``--help`` raise ValueError, because argparse
+    formats help text with ``%``.  Every option must survive being printed."""
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    for option in ("--backend", "--qlh-base-url", "--data-dir", "--model", "--check"):
+        assert option in out
