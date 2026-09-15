@@ -75,6 +75,33 @@ def test_cli_tui_flag_delegates_to_the_tui(monkeypatch):
     assert seen == [["--host", "http://127.0.0.1:8099"]], "--tui 应被剔除，其余参数透传"
 
 
+def test_submitting_a_message_does_not_crash():
+    """回归守卫：主界面敲回车曾直接把 app 打崩 —— on_input_submitted 读了
+    Static.renderable，而 Textual 8.x 的 Static 没有该属性。此前只测了启动路径，
+    因此漏掉了交互路径。"""
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    captured: list[str] = []
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            composer = app.query_one("#composer")
+            composer.focus()  # 未聚焦时按 Enter 不会派发成 Input.Submitted
+            await pilot.pause()
+            composer.value = "帮我写个短小的俳句"
+            await pilot.press("enter")
+            await pilot.pause()
+            captured.append(str(app.query_one("#transcript").content or ""))
+
+    asyncio.run(scenario())
+    assert "帮我写个短小的俳句" in captured[0], "输入应写入 transcript，且不得抛异常"
+
+
 def test_react_ui_is_independent_and_uses_non_green_cyber_accent():
     package = (UI_ROOT / "package.json").read_text(encoding="utf-8")
     styles = (UI_ROOT / "src" / "styles.css").read_text(encoding="utf-8")

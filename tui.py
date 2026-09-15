@@ -425,7 +425,8 @@ def create_app(
                 return
             event.input.value = ""
             transcript = self.query_one("#transcript", Static)
-            current = str(transcript.renderable)
+            # Textual 8.x 的 Static 没有 .renderable；正文用官方属性 .content 读回。
+            current = str(transcript.content or "")
             status = self.query_one("#status", Static)
             status.update("THINKING · 生成中…")
             try:
