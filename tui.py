@@ -832,7 +832,8 @@ def create_app(
         # ---- boot：先复用、再自起；网络全在 worker 线程 ----
         def _boot_worker(self) -> None:
             note = "reused"
-            if not _api_alive(self._host):
+            alive = _api_alive(self._host)
+            if not alive:
                 if self._serve:
                     try:
                         shell, url = start_local_backend(
@@ -841,13 +842,20 @@ def create_app(
                         self._shell = shell
                         self._host = url
                         note = "started"
+                        alive = True
                     except Exception as exc:  # noqa: BLE001 - degrade, never crash the UI
                         note = f"start_failed: {exc}"
                 else:
                     note = "serve_disabled"
-            # 启动路径统一用短超时：本地端点 2s 足够；离线时也不会让开窗白等一分钟。
-            data = _probe(self._host, timeout=2.0)
-            library = _fetch_model_library(self._host)
+            if alive:
+                # 启动路径统一用短超时：本地端点 2s 足够；离线时也不会让开窗白等一分钟。
+                data = _probe(self._host, timeout=2.0)
+                library = _fetch_model_library(self._host, timeout=2.0)
+            else:
+                # 后端不通时**不再逐个端点探测** —— 那是十几次注定失败的请求，只为得到同一个
+                # 结论；离线时会让启动（以及每个测试）白等约 8 秒。
+                data = {"error": f"backend unavailable ({note})"}
+                library = {"ok": False, "profiles": [], "presets": [], "jobs": []}
             data.update(library)
             self._deliver(note, data)
 

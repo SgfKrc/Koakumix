@@ -599,6 +599,31 @@ def test_mcp_rpc_and_asset_prefix_routing():
     asyncio.run(scenario())
 
 
+def test_boot_skips_the_endpoint_sweep_when_the_backend_is_down(monkeypatch):
+    """回归守卫：后端不通时曾仍然逐个端点探测 —— 十几次注定失败的请求。
+
+    那让离线时的启动（以及每个 pilot 测试）白等约 8 秒：实测
+    _api_alive 1.55s + _probe 2.00s + _fetch_model_library 6.14s ≈ 9.7s。
+    """
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    calls: list[str] = []
+    monkeypatch.setattr(tui, "_probe", lambda *a, **k: calls.append("probe") or {})
+    monkeypatch.setattr(tui, "_fetch_model_library", lambda *a, **k: calls.append("library") or {"ok": False})
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert calls == [], "后端不通时不应再逐个端点探测"
+            assert str(app.query_one("#status").content).startswith("OFFLINE")
+
+    asyncio.run(scenario())
+
+
 def test_react_ui_is_independent_and_uses_non_green_cyber_accent():
     package = (UI_ROOT / "package.json").read_text(encoding="utf-8")
     styles = (UI_ROOT / "src" / "styles.css").read_text(encoding="utf-8")
