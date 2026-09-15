@@ -1,6 +1,6 @@
 # Koakumix 下一阶段开发票计划（生图/多模态闭环 + S7 联网+MCP / S8 长期记忆）
 
-> 状态：**`S5-CLOSE-01` 已完成（2026-09-15），本阶段开发票全部走完；支线对齐票 `SIDE-KOAKU-01`（模型舰队合同对齐）与 `SIDE-KOAKU-03`（多模态按设备选模）已完成**——Koakumix 新增 `model_profiles/manifest_bridge.py`（只读主仓资产 manifest → `ModelProfile`，不 import 主仓、不复制加载器）与 `model_profiles/fleet_select.py`（按注入的设备能力选 vision/text 模型，缺 vision 能力时降级到文本并明示"图片理解关闭"，绝不强装大模型）；`ModelProfile` 增加独立 `format` 字段；真实第三方 MCP 服务、认证与权限仍属于后置验收；前置状态回顾：S1-S4 本机/离线开发门已完成（v10 记录），S6（React 工作台 + Textual TUI）已完成本机开发门；本文档新增三条支线：**Koakumix 生图/多模态闭环、S7（联网搜索 + 轻量 MCP 服务）、S8（小模型长期记忆：RAG + 上下文压缩 + 本地 memory）**。2026-09-14 起，QLH 主项目不再提供生图侧车、远端生成或 SD 资产；相关票只在 Koakumix 侧执行。
+> 状态：**`S5-CLOSE-01` 已完成（2026-09-15），本阶段开发票全部走完；支线对齐票 `SIDE-KOAKU-01`（模型舰队合同对齐）、`SIDE-KOAKU-03`（多模态按设备选模）与 `S3.2-MM-01`（多模态追问上下文合同本机门）已完成**——Koakumix 新增 `model_profiles/manifest_bridge.py`（只读主仓资产 manifest → `ModelProfile`，不 import 主仓、不复制加载器）、`model_profiles/fleet_select.py`（按注入的设备能力选 vision/text 模型，缺 vision 能力时降级到文本并明示"图片理解关闭"，绝不强装大模型）与 `image/refs.py`（image asset ref + 有界缩略卡 + 计入预算的多模态追问上下文，超预算显式 `omitted_count`/`truncated`）；`ModelProfile` 增加独立 `format` 字段，`ContextBudget` 增加 `reserve_for_asset_cards()`；真实第三方 MCP 服务、认证与权限仍属于后置验收；前置状态回顾：S1-S4 本机/离线开发门已完成（v10 记录），S6（React 工作台 + Textual TUI）已完成本机开发门；本文档新增三条支线：**Koakumix 生图/多模态闭环、S7（联网搜索 + 轻量 MCP 服务）、S8（小模型长期记忆：RAG + 上下文压缩 + 本地 memory）**。2026-09-14 起，QLH 主项目不再提供生图侧车、远端生成或 SD 资产；相关票只在 Koakumix 侧执行。
 >
 > 创建日期：2026-09-08
 > 适用范围：harness 子项目下一阶段票；不与 [WEB-TOOL 联网支线](../../docs/archive/联网搜索与轻量Fetch工具调用可行性调研与分期计划.md) 合并（那些是主项目运行时工具，本票是 harness 侧能力与对外服务）；不覆盖训练微调。
@@ -77,7 +77,7 @@ S6 工作台 UI（依赖 S7/S8 的 API 面）───────────�
 | `S3.2-RT-01` | S3.2 红队 | 四类红队 fixture（prompt injection、工具越权、图片路径、上下文注入）与统一 fail-closed gate | S1/S2/S3/S4 已有契约 | **已完成本机开发门**；fixture digest 稳定，危险样本全部 blocked，决策 schema 可审计 |
 | `S3.2-RT-02` | S3.2 红队 | `red_team_blocked`/越权通过率/`schema_valid_rate` 指标接入 evaluation report 与 promotion gate | RT-01 | **已完成本机开发门**；默认 block rate=100%、schema valid≥98%、越权通过=0 |
 | `S3.2-IMG-01` | S3.2 生图 | 独立 executor 生命周期、真实 diffusers/CUDA 适配边界和互斥锁 | RT-01 | **硬件后置**；无 CUDA 时保持 unavailable |
-| `S3.2-MM-01` | S3.2 多模态 | image asset ref、缩略卡和多模态追问上下文合同 | IMG-01 | 无硬件可先做合同/fixture，真机后置 |
+| `S3.2-MM-01` | S3.2 多模态 | image asset ref、缩略卡和多模态追问上下文合同 | IMG-01 | **已完成本机合同门（2026-09-15）**：`image/refs.py`（`qlh.harness.image_ref.v1` / `qlh.harness.multimodal_context.v1`）——`ImageAssetRef` 只带标识与摘要（无路径、无 base64、无字节）；`render_thumbnail_card()` 产出有界卡（label 夹 48 字、文本 ≤240 字，token 由注入的计数器计算，未注入时标注 `heuristic_estimate`）；`build_multimodal_context()` 将卡片计入 `input_budget`，超预算记 `omitted_count` + `truncated` 并加 notice，绝不静默丢图；`ContextBudget` 新增 `reserve_for_asset_cards()`（`input_budget = align(n_ctx - max_new_tokens - overhead - card_tokens)`）。**真机视觉适配器仍后置**（需 CUDA） |
 | `S3.2-EDIT-01` | S3.2 编辑 | img2img/inpaint/IP-Adapter/指令编辑 contracts 与远端映射 | S3 contracts | 本机契约门；至少一条真机路径后置 |
 | `S8-MEM-01` | S8 记忆 | 用户-owned SQLite facts/preferences/decisions schema、scope、软删除/失效 | S4 session/RAG | **已完成本机开发门**；独立 memory SQLite、scope 硬过滤、显式删除确认、失效/过期保留审计行 |
 | `S8-MEM-02` | S8 记忆 | FTS5 检索、citation、分层预算与 `omitted_count`/`truncated` | MEM-01 | **已完成本机开发门**；FTS5 scope/lifecycle 过滤、可选 embedding rerank、三层共享预算 |
@@ -117,6 +117,7 @@ S6 工作台 UI（依赖 S7/S8 的 API 面）───────────�
 - 2026-09-09：v13 —— 完成 `S7-MCP-02` 本机开发门：`api_layer` 新增 `/v1/mcp/manifest`、`/v1/mcp/tools`、`/v1/mcp/call`、`/v1/mcp/rpc`，全部复用同一注入式 MCP registry/store/adapter；manifest 显式通告 stdio、loopback SSE 和 external MCP configuration-only 状态。React Harness 工作台新增 `MCP 控制面`，按后端 manifest 展示工具、schema、configured/read-write 状态，支持 JSON 参数调用和错误/结果回显；桌面与窄屏 smoke 覆盖 MCP 导航、调用、主题、焦点和横向溢出。MCP/API/UI 定向 15 passed，Harness 全量 105 passed，全仓库 3324 passed、19 skipped；真实第三方 MCP 服务、认证与权限仍留后置验收。
 - 2026-09-15：v14 —— 完成 `SIDE-KOAKU-01`（支线票，主仓 `docs/支线开发计划-外置迁移与Koakumix-2026-09-14.md` §S2）：新增 `model_profiles/manifest_bridge.py`，**只读**主仓模型资产 manifest（`.qlh-model-asset.json` / 兼容名 `model.manifest.json`，`schema=1`，2 MiB 大小门）并映射为 `ModelProfile`——model id（`source` 规范化 + 短名别名）、`format`（取自 `model_type`）、`revision`（空值 → `unversioned`）、`artifact_sha256`、tokenizer 与 chat-template 摘要（按 `files[]` 文件名匹配）、`resources`（文件数/字节数）、manifest 摘要进 `evidence`；**不 import 主仓代码、不复制加载器、不启动 sidecar**。`ModelProfile` 新增独立 **`format`** 字段（与 `backend`/engine 分离，用户裁决），`profile_id` 与其余字段语义不变。manifest 无法证明的能力一律 `unknown` 且 `production_eligible=False`（fail-closed）；绝对路径、上溯路径、非小写 64 位摘要、未知 format、超大或非法 manifest 全部拒绝。契约测试 `tests/test_harness_model_fleet.py`，专项 31 passed，Koakumix 全量 **303 passed**（32.0s，零跳过）。
 - 2026-09-15：v15 —— 完成 `SIDE-KOAKU-03`（支线票，同 §S2）：新增 `model_profiles/fleet_select.py`——`DeviceProfile`（platform/accelerator/memory_bytes/vram_bytes，**由调用方注入**，本模块不探测硬件）、`FleetSelector.select(role="answer"|"vision", device=...)`、`FleetSelection.as_dict()`（含 `reasons`、`degradations` 与逐候选 `FleetCandidate`）。准入复用 `CapabilityGate` 的 `answer`/`multimodal` mode：vision 必须 `multimodal=verified`（**`declared` 不够**）；资源门只在 profile **显式声明** `resources.min_vram_bytes`/`min_memory_bytes` 时阻断，未声明则记 `resource_requirement_undeclared` 而不臆断。**可解释降级**：无可用 vision 模型时降级为文本模型（`mode="degraded_text_only"` + `image_understanding_disabled`），文本也不可用才 `available=False`；排序按 gate 状态 → artifact 绑定 → id 保证确定性。专项 `tests/test_harness_model_fleet_select.py` 43 passed，Koakumix 全量 **315 passed**（33.4s，零跳过）。
+- 2026-09-15：v16 —— 完成 `S3.2-MM-01` **本机合同门**：新增 `image/refs.py`（`qlh.harness.image_ref.v1`、`qlh.harness.multimodal_context.v1`）——`ImageAssetRef.from_record()` 从 `ImageAssetStore` 记录构造引用，只含 asset_id/sha256/mime/尺寸/来源/标注，**无路径、无 base64、无字节**（可安全记录与传输）；`render_thumbnail_card()` 产出有界缩略卡（label 夹 48 字、文本 ≤240 字，token 由注入的 `TokenCounter` 计算，未注入时显式标 `heuristic_estimate`）；`build_multimodal_context()` 按预算逐卡纳入，超预算写 `omitted_count` + `truncated=true` + notice（`image_cards_omitted` / `image_context_dropped`），prompt 自身溢出时提前返回并标 `prompt_exceeds_input_budget`，绝不静默丢图。`context_engine/budget.py` 新增 `reserve_for_asset_cards()`，把卡片计入既有 `overhead`：`input_budget = align(n_ctx - max_new_tokens - overhead - card_tokens)`，超限 fail-closed；`MAX_REFS_PER_TURN=4`、`SUPPORTED_MIME_TYPES=(image/png, image/jpeg, image/webp)`。**真机视觉适配器与生图真机仍后置（需 CUDA）**。专项 `tests/test_harness_image_refs.py` 25 passed，Koakumix 全量 **340 passed**（35.6s，零跳过）。
 
 ## 9. `S3.2-RT-01` 实施记录
 
@@ -363,3 +364,23 @@ desktop/mobile: MCP navigation, tool call, theme, focus, no overflow passed
 ```
 
 本票对应主仓支线票 `SIDE-KOAKU-03`（主仓 `docs/支线开发计划-外置迁移与Koakumix-2026-09-14.md` §S2）。本票只做选模决策，不接入 `api_layer` 路由，也不调用任何真实适配器。
+
+## 22. `S3.2-MM-01` 实施记录
+
+本票把"生成的图能被追问引用"落成合同层，不接真机视觉适配器、不内联图片字节：
+
+- 新增 `harness_workbench/image/refs.py`。`ImageAssetRef.from_record()` 把 `ImageAssetStore` 的资产记录转成引用：只带 `asset_id` / `sha256` / `mime_type` / 尺寸 / 来源 / 标注，**没有路径、没有 base64、没有字节**，因此可以安全写日志、入库或发给模型提供方。构造时校验 `img_<hex>` 形状、小写 64 位摘要、mime 白名单（png/jpeg/webp）、来源枚举、正尺寸，并拒绝任何形似绝对路径的标注或 scope。
+- `render_thumbnail_card()` 生成缩略卡：`label` 夹到 48 字、整卡文本 ≤ `MAX_CARD_CHARS=240` 字，含 asset_id、mime、尺寸、sha256 前 12 位与来源。token 数用注入的 `TokenCounter` 计算；未注入时用与 `context_engine.tokenizer.HeuristicTokenizer` 同形的启发式估计，并把 `token_count_mode` 标成 `heuristic_estimate` —— **不把估计当实测**。
+- `build_multimodal_context()` 是追问回合的合同：按 `input_budget` 逐卡纳入，`MAX_REFS_PER_TURN=4`；放不下的卡片计入 `omitted_count` 并置 `truncated=true`，notice 记 `image_cards_omitted`；一张都放不下记 `image_context_dropped`；prompt 本身超预算时提前返回并标 `prompt_exceeds_input_budget`。**任何被丢掉的图都不会被静默当成"已理解"**。
+- `context_engine/budget.py` 新增 `reserve_for_asset_cards()`，把卡片计入引擎已有的 `overhead` 项，使预算公式统一为 `input_budget = align(n_ctx - max_new_tokens - overhead - card_tokens)`；卡片挤掉全部输入空间时 fail-closed 抛错，`card_tokens=0` 时原样返回（旧调用行为不变）。
+
+验证证据：
+
+```text
+.\.venv-test\Scripts\python.exe -m pytest tests/test_harness_image_refs.py -q
+25 passed
+.\.venv-test\Scripts\python.exe -m pytest (Get-ChildItem tests -Filter 'test_harness_*.py').FullName -q
+340 passed
+```
+
+本票完成的是**合同与 fixture 闭环**（`ImageAssetStore` 落盘 → 引用 → 缩略卡 → 追问上下文），**不含真实视觉推理**：真机视觉适配器与生图真机（`S3.2-IMG-01`）仍按硬件可用性后置。
