@@ -1,6 +1,6 @@
 # Koakumix 下一阶段开发票计划（生图/多模态闭环 + S7 联网+MCP / S8 长期记忆）
 
-> 状态：**`S5-CLOSE-01` 已完成（2026-09-15），本阶段开发票全部走完；`SIDE-KOAKU-01`（模型舰队合同对齐）已完成**——Koakumix 新增 `model_profiles/manifest_bridge.py`（只读主仓资产 manifest → `ModelProfile`，不 import 主仓、不复制加载器），`ModelProfile` 增加独立 `format` 字段；真实第三方 MCP 服务、认证与权限仍属于后置验收；前置状态回顾：S1-S4 本机/离线开发门已完成（v10 记录），S6（React 工作台 + Textual TUI）已完成本机开发门；本文档新增三条支线：**Koakumix 生图/多模态闭环、S7（联网搜索 + 轻量 MCP 服务）、S8（小模型长期记忆：RAG + 上下文压缩 + 本地 memory）**。2026-09-14 起，QLH 主项目不再提供生图侧车、远端生成或 SD 资产；相关票只在 Koakumix 侧执行。
+> 状态：**`S5-CLOSE-01` 已完成（2026-09-15），本阶段开发票全部走完；支线对齐票 `SIDE-KOAKU-01`（模型舰队合同对齐）与 `SIDE-KOAKU-03`（多模态按设备选模）已完成**——Koakumix 新增 `model_profiles/manifest_bridge.py`（只读主仓资产 manifest → `ModelProfile`，不 import 主仓、不复制加载器）与 `model_profiles/fleet_select.py`（按注入的设备能力选 vision/text 模型，缺 vision 能力时降级到文本并明示"图片理解关闭"，绝不强装大模型）；`ModelProfile` 增加独立 `format` 字段；真实第三方 MCP 服务、认证与权限仍属于后置验收；前置状态回顾：S1-S4 本机/离线开发门已完成（v10 记录），S6（React 工作台 + Textual TUI）已完成本机开发门；本文档新增三条支线：**Koakumix 生图/多模态闭环、S7（联网搜索 + 轻量 MCP 服务）、S8（小模型长期记忆：RAG + 上下文压缩 + 本地 memory）**。2026-09-14 起，QLH 主项目不再提供生图侧车、远端生成或 SD 资产；相关票只在 Koakumix 侧执行。
 >
 > 创建日期：2026-09-08
 > 适用范围：harness 子项目下一阶段票；不与 [WEB-TOOL 联网支线](../../docs/archive/联网搜索与轻量Fetch工具调用可行性调研与分期计划.md) 合并（那些是主项目运行时工具，本票是 harness 侧能力与对外服务）；不覆盖训练微调。
@@ -116,6 +116,7 @@ S6 工作台 UI（依赖 S7/S8 的 API 面）───────────�
 - 2026-09-09：v12 —— 完成 `S7-MCP-01`：新增独立 `harness_workbench/mcp_server/`，以标准 JSON-RPC 方法 `initialize`、`tools/list`、`tools/call` 暴露 chat、sessions、rag、memory、images 和 web 工具；内置工具由 harness store/adapter 注入，未配置能力只通告合同且调用 fail-closed。新增严格对象 schema 校验、未知参数拒绝、只读/写入/破坏性/open-world annotations；session create 与 rag search fixture 成功闭环。新增 loopback-only SSE transport、外部 MCP 配置声明和注入式 fake discovery/call 隔离通道，未创建真实第三方进程/连接。专项 10 passed，全量 Harness 测试 103 passed；下一票为 `S7-MCP-02`。
 - 2026-09-09：v13 —— 完成 `S7-MCP-02` 本机开发门：`api_layer` 新增 `/v1/mcp/manifest`、`/v1/mcp/tools`、`/v1/mcp/call`、`/v1/mcp/rpc`，全部复用同一注入式 MCP registry/store/adapter；manifest 显式通告 stdio、loopback SSE 和 external MCP configuration-only 状态。React Harness 工作台新增 `MCP 控制面`，按后端 manifest 展示工具、schema、configured/read-write 状态，支持 JSON 参数调用和错误/结果回显；桌面与窄屏 smoke 覆盖 MCP 导航、调用、主题、焦点和横向溢出。MCP/API/UI 定向 15 passed，Harness 全量 105 passed，全仓库 3324 passed、19 skipped；真实第三方 MCP 服务、认证与权限仍留后置验收。
 - 2026-09-15：v14 —— 完成 `SIDE-KOAKU-01`（支线票，主仓 `docs/支线开发计划-外置迁移与Koakumix-2026-09-14.md` §S2）：新增 `model_profiles/manifest_bridge.py`，**只读**主仓模型资产 manifest（`.qlh-model-asset.json` / 兼容名 `model.manifest.json`，`schema=1`，2 MiB 大小门）并映射为 `ModelProfile`——model id（`source` 规范化 + 短名别名）、`format`（取自 `model_type`）、`revision`（空值 → `unversioned`）、`artifact_sha256`、tokenizer 与 chat-template 摘要（按 `files[]` 文件名匹配）、`resources`（文件数/字节数）、manifest 摘要进 `evidence`；**不 import 主仓代码、不复制加载器、不启动 sidecar**。`ModelProfile` 新增独立 **`format`** 字段（与 `backend`/engine 分离，用户裁决），`profile_id` 与其余字段语义不变。manifest 无法证明的能力一律 `unknown` 且 `production_eligible=False`（fail-closed）；绝对路径、上溯路径、非小写 64 位摘要、未知 format、超大或非法 manifest 全部拒绝。契约测试 `tests/test_harness_model_fleet.py`，专项 31 passed，Koakumix 全量 **303 passed**（32.0s，零跳过）。
+- 2026-09-15：v15 —— 完成 `SIDE-KOAKU-03`（支线票，同 §S2）：新增 `model_profiles/fleet_select.py`——`DeviceProfile`（platform/accelerator/memory_bytes/vram_bytes，**由调用方注入**，本模块不探测硬件）、`FleetSelector.select(role="answer"|"vision", device=...)`、`FleetSelection.as_dict()`（含 `reasons`、`degradations` 与逐候选 `FleetCandidate`）。准入复用 `CapabilityGate` 的 `answer`/`multimodal` mode：vision 必须 `multimodal=verified`（**`declared` 不够**）；资源门只在 profile **显式声明** `resources.min_vram_bytes`/`min_memory_bytes` 时阻断，未声明则记 `resource_requirement_undeclared` 而不臆断。**可解释降级**：无可用 vision 模型时降级为文本模型（`mode="degraded_text_only"` + `image_understanding_disabled`），文本也不可用才 `available=False`；排序按 gate 状态 → artifact 绑定 → id 保证确定性。专项 `tests/test_harness_model_fleet_select.py` 43 passed，Koakumix 全量 **315 passed**（33.4s，零跳过）。
 
 ## 9. `S3.2-RT-01` 实施记录
 
@@ -341,3 +342,24 @@ desktop/mobile: MCP navigation, tool call, theme, focus, no overflow passed
 ```
 
 本票对应主仓支线票 `SIDE-KOAKU-01`（主仓 `docs/支线开发计划-外置迁移与Koakumix-2026-09-14.md` §S2）。
+
+## 21. `SIDE-KOAKU-03` 实施记录
+
+本票让 harness 能从模型舰队按**实际存在的设备**选 vision/text 模型，缺能力时给出可解释降级；不探测硬件、不加载权重、不联网：
+
+- 新增 `harness_workbench/model_profiles/fleet_select.py`。`DeviceProfile`（`platform` / `accelerator` / `memory_bytes` / `vram_bytes`）由**调用方注入**（主仓设备画像、Android 侧探测或 fixture），本模块不自行探测硬件，从而保持确定性且可离线测试；非法字段（未知平台/加速器、负数字节）直接拒绝。
+- `FleetSelector.select(role, device)` 对舰队每个成员复用 `CapabilityGate`：`answer` 角色要求 `answer` mode，`vision` 角色要求 `multimodal` mode。因此 `probe.py` 只能达到的 `declared` 多模态**不足以**解锁 vision —— 与不伪造能力的原则一致。
+- 资源门保守：只有 profile **显式声明** `resources.min_vram_bytes` / `min_memory_bytes` 时才可能阻断（无加速器，或显存/内存不足 → `blocked`）；未声明则记 `resource_requirement_undeclared`，**不臆断**设备装不下。
+- 可解释降级：vision 无可用候选时降级选择文本模型（`mode="degraded_text_only"`，`degradations=("image_understanding_disabled",)`），理由逐条列出每个候选为何不可用（如 `mode_not_allowed:multimodal`、`insufficient_vram:...`）；文本模型也不可用才 `available=False` 并附 `no_model_available`。
+- 排序确定：gate 状态（verified → candidate → unknown → rejected）→ 是否绑定真实 artifact（`artifact_sha256`）→ `profile_id`，同输入必得同选。
+
+验证证据：
+
+```text
+.\.venv-test\Scripts\python.exe -m pytest tests/test_harness_model_fleet_select.py tests/test_harness_model_profiles.py tests/test_harness_model_fleet.py -q
+43 passed
+.\.venv-test\Scripts\python.exe -m pytest (Get-ChildItem tests -Filter 'test_harness_*.py').FullName -q
+315 passed
+```
+
+本票对应主仓支线票 `SIDE-KOAKU-03`（主仓 `docs/支线开发计划-外置迁移与Koakumix-2026-09-14.md` §S2）。本票只做选模决策，不接入 `api_layer` 路由，也不调用任何真实适配器。
