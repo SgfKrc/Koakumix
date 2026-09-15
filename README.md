@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/Koakumix.png" alt="Koakumix" width="220">
+</p>
+
 # Koakumix
 
 > **Language**: 简体中文 · English (planned)
