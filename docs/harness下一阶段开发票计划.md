@@ -321,3 +321,23 @@ desktop/mobile: MCP navigation, tool call, theme, focus, no overflow passed
 ```
 
 本票完成后进入 `S5-CLOSE-01`；真实第三方 MCP 端点、认证、权限和客户端互操作仍需外部服务验收票，不作为本机开发门结论。
+
+## 20. `SIDE-KOAKU-01` 实施记录
+
+本票把 harness 模型画像与主仓模型资产合同对齐，不复制主仓加载器、不启动 sidecar、不引入真实网络：
+
+- 新增 `harness_workbench/model_profiles/manifest_bridge.py`。只读主仓资产 manifest（`.qlh-model-asset.json` / 兼容名 `model.manifest.json`，`schema=1`），先过 2 MiB 大小门再解析；不 import 主仓代码，路径只按目录名与文件名处理。
+- `ModelProfile` 新增独立 `format` 字段（与 `backend`/engine 分离，用户裁决）：一个 engine 可加载多种 format，一种 format 可由不同 engine 承载；`profile_id` 与既有字段语义不变，旧画像以空 format 继续可读。
+- 映射规则：`source` → `model_id`（小写规范化，短名进 `aliases`）；`model_type` → `format`（仅接受 `safetensors`/`gguf`/`onnx`/`openvino`）；`revision` 空值 → `unversioned`；`artifact_sha256` 直通；`files[]` 按文件名匹配 tokenizer 与 chat-template 摘要；`resources` 记录文件数与总字节数；manifest 摘要与来源进 `evidence`。
+- fail-closed：manifest 无法证明的能力一律 `unknown` 且 `production_eligible=False`；绝对路径、上溯路径、非小写 64 位摘要、未知 format、超大或畸形 manifest、缺失 manifest 全部拒绝；`bridge_report()` 逐目录收集失败而不中断整批。
+
+验证证据：
+
+```text
+.\.venv-test\Scripts\python.exe -m pytest tests/test_harness_model_fleet.py tests/test_harness_model_profiles.py -q
+31 passed
+.\.venv-test\Scripts\python.exe -m pytest (Get-ChildItem tests -Filter 'test_harness_*.py').FullName -q
+303 passed
+```
+
+本票对应主仓支线票 `SIDE-KOAKU-01`（主仓 `docs/支线开发计划-外置迁移与Koakumix-2026-09-14.md` §S2）。
