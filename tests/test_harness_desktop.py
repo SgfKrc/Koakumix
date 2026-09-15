@@ -278,3 +278,102 @@ def test_check_mode_exits_nonzero_when_the_build_is_missing(tmp_path, capsys):
     capsys.readouterr()
 
     assert exit_code == 2
+
+
+# --------------------------------------------------------- backend & store wiring
+def test_default_data_dir_follows_localappdata(monkeypatch, tmp_path):
+    """Harness state belongs in the per-user directory, never inside the checkout."""
+
+    from harness_workbench.desktop import APP_DIR_NAME, REPO_ROOT, default_data_dir
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData"))
+    assert default_data_dir() == tmp_path / "AppData" / APP_DIR_NAME
+
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert default_data_dir() == pathlib.Path.home() / ".koakumix"
+    assert REPO_ROOT not in default_data_dir().parents
+
+
+def test_resolved_data_dir_prefers_the_explicit_value(tmp_path):
+    explicit = tmp_path / "custom"
+    assert DesktopShellConfig(data_dir=explicit).resolved_data_dir() == explicit
+
+
+def test_probe_qlh_api_reports_unavailable_instead_of_raising():
+    """A missing main-project API is a normal outcome -- the shell falls back, quietly."""
+
+    from harness_workbench.desktop import probe_qlh_api
+
+    assert probe_qlh_api("http://127.0.0.1:1", timeout=0.3) is False  # nothing listens
+    assert probe_qlh_api("not-a-url", timeout=0.3) is False  # malformed stays quiet too
+
+
+def test_unknown_backend_is_refused():
+    shell = DesktopShell(DesktopShellConfig(backend="nope"))
+
+    with pytest.raises(DesktopShellError) as excinfo:
+        shell.build_adapter()
+
+    assert excinfo.value.code == "unknown_backend"
+
+
+def test_qlh_backend_is_preferred_when_the_api_answers(monkeypatch):
+    """The reported bug: the shell always started its own llama-server, so the model
+    catalog/preset panels had nothing behind them.  With the QLH API reachable the shell
+    must talk to it -- and must not demand --model."""
+
+    from harness_workbench import desktop as desktop_module
+    from harness_workbench.adapters import QLHAdapter
+
+    monkeypatch.setattr(desktop_module, "probe_qlh_api", lambda *_args, **_kwargs: True)
+    shell = DesktopShell(DesktopShellConfig(backend="qlh", qlh_base_url="http://127.0.0.1:8090"))
+
+    adapter = shell.build_adapter()
+
+    assert isinstance(adapter, QLHAdapter)
+    assert shell._adapter_backend == "qlh"
+    assert adapter.config.base_url == "http://127.0.0.1:8090"
+
+
+def test_llama_fallback_still_complains_about_a_missing_model(monkeypatch):
+    """Falling back to the bundled server keeps the old, actionable error."""
+
+    from harness_workbench import desktop as desktop_module
+
+    monkeypatch.setattr(desktop_module, "probe_qlh_api", lambda *_args, **_kwargs: False)
+    shell = DesktopShell(DesktopShellConfig(backend="qlh"))  # unreachable -> fallback
+
+    with pytest.raises(DesktopShellError) as excinfo:
+        shell.build_adapter()
+
+    assert excinfo.value.code == "model_not_configured"
+    assert "8090" in str(excinfo.value)
+
+
+def test_build_dependencies_wires_the_stores_the_ui_asked_for(tmp_path):
+    """The exact reported failure ("new session errors, something about a store"):
+    api_layer answers 503 whenever a store is None, so every keyword the shell passes to
+    create_app has to be a real, working object."""
+
+    import inspect
+
+    from harness_workbench.api_layer import create_app
+    from harness_workbench.session import SessionStore
+
+    shell = DesktopShell(DesktopShellConfig(data_dir=tmp_path / "state"))
+    deps = shell.build_dependencies()
+
+    accepted = set(inspect.signature(create_app).parameters)
+    assert set(deps) <= accepted, f"create_app would reject {set(deps) - accepted}"
+    assert all(value is not None for value in deps.values())
+
+    state = tmp_path / "state"
+    assert isinstance(deps["session_store"], SessionStore)
+    for name in ("sessions", "rag", "memory"):
+        assert (state / f"{name}.sqlite3").is_file(), f"{name} sqlite was not created"
+
+    # The call the UI makes when you press "new session".
+    created = deps["session_store"].create(owner_scope="local", title="New session")
+    assert created.session_id
+    listed = deps["session_store"].list(owner_scope="local", limit=5)
+    assert created.session_id in {item.session_id for item in listed}
