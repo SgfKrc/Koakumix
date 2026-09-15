@@ -13,6 +13,7 @@ from .api_layer import create_app
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="QLH small-model harness workbench")
+    parser.add_argument("--tui", action="store_true", help="启动 TUI 工作台（等价于 koakumix-tui，不需要 --model）")
     parser.add_argument("--model", required=True, help="local GGUF or backend model path")
     parser.add_argument("--llama-server", default="llama-server", help="llama-server executable")
     parser.add_argument("--host", default="127.0.0.1")
@@ -60,6 +61,11 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["skill"]:
         return _skill_main(argv[1:])
+    if "--tui" in argv:
+        # 等价于 `koakumix-tui`；在此分流，免得触发本解析器的 --model 必填校验。
+        from .tui import main as tui_main  # noqa: PLC0415
+
+        return tui_main([item for item in argv if item != "--tui"])
     args = build_parser().parse_args(argv)
     config = LlamaServerConfig(
         executable=args.llama_server,

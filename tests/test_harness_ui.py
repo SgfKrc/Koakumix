@@ -54,6 +54,24 @@ def test_tui_uses_persistent_session_contract():
     assert "new-session" in tui
 
 
+def test_cli_tui_flag_delegates_to_the_tui(monkeypatch):
+    """`koakumix --tui` 等价于 `koakumix-tui`，且不会触发 --model 必填校验。"""
+
+    from harness_workbench import cli
+
+    seen: list[list[str]] = []
+
+    def _fake_tui_main(argv=None):
+        seen.append(list(argv or []))
+        return 0
+
+    # cli.main 在函数内 `from .tui import main`，所以 patch 模块属性即可生效。
+    monkeypatch.setattr("harness_workbench.tui.main", _fake_tui_main)
+
+    assert cli.main(["--tui", "--host", "http://127.0.0.1:8099"]) == 0
+    assert seen == [["--host", "http://127.0.0.1:8099"]], "--tui 应被剔除，其余参数透传"
+
+
 def test_react_ui_is_independent_and_uses_non_green_cyber_accent():
     package = (UI_ROOT / "package.json").read_text(encoding="utf-8")
     styles = (UI_ROOT / "src" / "styles.css").read_text(encoding="utf-8")
