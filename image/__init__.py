@@ -5,6 +5,21 @@ image-generation boundary and delegates execution to an injected local
 executor.
 """
 
+from .assembly import (
+    ASSEMBLY_SCHEMA,
+    ASSET_INVALID,
+    ASSET_ROOT_MISSING,
+    ENV_ASSET_ROOT,
+    ENV_DEVICE,
+    ENV_EXECUTOR,
+    ENV_MODEL_ID,
+    EXECUTOR_DIFFUSERS,
+    EXECUTOR_NOT_ENABLED,
+    READY,
+    RUNTIME_MISSING,
+    ImageEngineAssembly,
+    build_local_image_engine,
+)
 from .assets import ImageAssetRecord, ImageAssetStore
 from .contracts import (
     GeneratedImage,
@@ -13,6 +28,15 @@ from .contracts import (
     ImageAdapterError,
     ImageRequest,
     ImageRequestError,
+)
+from .diffusers_executor import (
+    DEVICE_CHOICES,
+    DTYPE_CHOICES,
+    EXECUTOR_SCHEMA,
+    DiffusersExecutorConfig,
+    DiffusersImageExecutor,
+    diffusers_available,
+    executor_evidence,
 )
 from .editing import (
     CONTRACT_ONLY,
@@ -45,18 +69,34 @@ from .refs import (
 )
 
 __all__ = [
+    "ASSEMBLY_SCHEMA",
+    "ASSET_INVALID",
+    "ASSET_ROOT_MISSING",
     "CONTRACT_ONLY",
+    "DEVICE_CHOICES",
+    "DTYPE_CHOICES",
     "EDIT_MODES",
     "EDIT_MODE_SPECS",
     "EDIT_REQUEST_SCHEMA",
+    "ENV_ASSET_ROOT",
+    "ENV_DEVICE",
+    "ENV_EXECUTOR",
+    "ENV_MODEL_ID",
+    "EXECUTOR_DIFFUSERS",
+    "EXECUTOR_NOT_ENABLED",
+    "EXECUTOR_SCHEMA",
     "IMAGE_REF_SCHEMA",
     "MAX_CARD_CHARS",
     "MAX_PROMPT_CHARS",
     "MAX_REFS_PER_TURN",
     "MULTIMODAL_CONTEXT_SCHEMA",
+    "READY",
+    "RUNTIME_MISSING",
     "SUPPORTED_MIME_TYPES",
     "UNAVAILABLE",
     "AssetManifestReport",
+    "DiffusersExecutorConfig",
+    "DiffusersImageExecutor",
     "EditAvailability",
     "EditModeSpec",
     "GeneratedImage",
@@ -67,6 +107,7 @@ __all__ = [
     "ImageAssetRef",
     "ImageAssetStore",
     "ImageEditRequest",
+    "ImageEngineAssembly",
     "ImageRefError",
     "ImageRequest",
     "ImageRequestError",
@@ -74,9 +115,12 @@ __all__ = [
     "LocalImageEngineConfig",
     "MultimodalContext",
     "ThumbnailCard",
+    "build_local_image_engine",
     "build_multimodal_context",
+    "diffusers_available",
     "edit_capability_matrix",
     "edit_mode_spec",
+    "executor_evidence",
     "render_thumbnail_card",
     "resolve_edit_availability",
     "validate_asset_manifest",
