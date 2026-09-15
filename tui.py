@@ -176,7 +176,7 @@ def create_app(*, host: str, model: str, splash: bool = True, splash_min: float 
         def on_mount(self) -> None:
             use_splash = self._splash and not self.is_headless
             if use_splash:
-                self.push_screen(SplashScreen("点燃血神之炉……", min_show=self._splash_min))
+                self.push_screen(SplashScreen("少女祈祷中……", min_show=self._splash_min))
                 self.run_worker(self._boot_worker, thread=True, name="boot")
             else:
                 self._apply_boot(_probe_boot(host))

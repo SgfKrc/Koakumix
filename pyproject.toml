@@ -18,6 +18,7 @@ desktop = ["pywebview>=5.0", "fastapi>=0.110", "uvicorn>=0.30"]
 
 [project.scripts]
 koakumix = "harness_workbench.cli:main"
+koakumix-tui = "harness_workbench.tui:main"
 koakumix-desktop = "harness_workbench.desktop:main"
 
 [tool.setuptools]

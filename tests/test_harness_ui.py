@@ -38,6 +38,14 @@ def test_tui_splash_controls_and_khorne_theme():
     assert splash.COLOR_EDGE == "#f2ece4"    # 白色描边
 
 
+def test_tui_splash_signoff_matches_patchouli():
+    """启动文案与 Patchouli 对齐（用户指定），且启动屏确实被接入。"""
+
+    source = (ROOT / "tui.py").read_text(encoding="utf-8")
+    assert "少女祈祷中" in source
+    assert "SplashScreen(" in source
+
+
 def test_tui_uses_persistent_session_contract():
     tui = (ROOT / "tui.py").read_text(encoding="utf-8")
     assert "/v1/sessions?owner_scope=local" in tui
