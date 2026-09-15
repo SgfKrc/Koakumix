@@ -49,12 +49,14 @@ DEFAULT_ICON = REPO_ROOT / "assets" / "Koakumix.png"
 DEFAULT_ICON_ICO = REPO_ROOT / "assets" / "Koakumix.ico"
 DEFAULT_TITLE = "Koakumix"
 SHELL_SCHEMA = "qlh.koakumix.desktop_shell.v1"
-# The frontend was built against the QLH main-project API -- ui_react/vite.config.ts
-# proxies /v1 and /healthz to 127.0.0.1:8090.  The shell therefore prefers that
-# backend, and only falls back to its own llama-server when QLH is not running.
-# Without this the model-selection / model-load / session panels all return 503:
-# api_layer reflects model_* onto the adapter and checks each store for ``None``.
-DEFAULT_QLH_BASE_URL = "http://127.0.0.1:8090"
+# The QLH main-project API is the only backend that has the model-selection /
+# model-load / device-profile surface: api_layer reflects model_* onto the adapter, and
+# checks each store.  Port 8000 is the main project's own default -- src/config.py
+# declares ``API_PORT = _env_int("QLH_API_PORT", 8000)`` and src/api_server.py documents
+# ``uvicorn src.api_server:app --port 8000``.  This is *not* the 8090 that
+# ui_react/vite.config.ts proxies to; that one is the harness's own api_layer in dev mode.
+# When nothing answers here, the shell falls back to its bundled llama-server.
+DEFAULT_QLH_BASE_URL = "http://127.0.0.1:8000"
 QLH_HEALTH_PATH = "/api/health"
 BACKEND_QLH = "qlh"
 BACKEND_LLAMA = "llama"

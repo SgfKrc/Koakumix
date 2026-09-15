@@ -347,7 +347,10 @@ def test_llama_fallback_still_complains_about_a_missing_model(monkeypatch):
         shell.build_adapter()
 
     assert excinfo.value.code == "model_not_configured"
-    assert "8090" in str(excinfo.value)
+    # Assert against the constant so a port change cannot silently break this test.
+    from harness_workbench.desktop import DEFAULT_QLH_BASE_URL
+
+    assert DEFAULT_QLH_BASE_URL in str(excinfo.value)
 
 
 def test_build_dependencies_wires_the_stores_the_ui_asked_for(tmp_path):
@@ -390,3 +393,15 @@ def test_help_renders_without_crashing(capsys):
     out = capsys.readouterr().out
     for option in ("--backend", "--qlh-base-url", "--data-dir", "--model", "--check"):
         assert option in out
+
+
+def test_default_qlh_base_url_targets_the_main_project_api():
+    """The shell must probe the main project's *own* port.  An earlier revision used
+    8090 -- copied from ui_react's dev proxy, which points at the harness's api_layer and
+    not at QLH -- so QLHAdapter could never have reached the main project."""
+
+    from harness_workbench.desktop import DEFAULT_QLH_BASE_URL, QLH_HEALTH_PATH
+
+    # src/config.py: API_PORT = _env_int("QLH_API_PORT", 8000)
+    assert DEFAULT_QLH_BASE_URL == "http://127.0.0.1:8000"
+    assert QLH_HEALTH_PATH == "/api/health"
