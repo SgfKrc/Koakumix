@@ -65,11 +65,19 @@ def test_require_frontend_fails_closed_with_the_build_command(tmp_path):
     assert "npm" in str(excinfo.value)
 
 
-def test_default_icon_points_at_the_shipped_mascot():
-    """The icon asset the user supplied must stay referenced by default."""
+def test_default_paths_point_inside_this_repository():
+    """Guard the mistake a real ``--check`` run caught: a wrong REPO_ROOT pointed both
+    the frontend and the icon at the main repository instead of this one."""
 
-    assert DEFAULT_ICON.name == "Koakumix.png"
-    assert DEFAULT_ICON.parent.name == "assets"
+    from harness_workbench.desktop import DEFAULT_DIST, REPO_ROOT
+
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    assert REPO_ROOT == repo
+    assert DEFAULT_DIST == repo / "ui_react" / "dist"
+    # The mascot the user supplied must actually be found by the default config.
+    assert DEFAULT_ICON == repo / "assets" / "Koakumix.png"
+    assert DEFAULT_ICON.is_file()
+    assert DesktopShellConfig().resolved_icon() is not None
 
 
 def test_icon_resolution_is_optional_not_fatal(tmp_path):

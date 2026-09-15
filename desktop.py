@@ -37,7 +37,8 @@ from typing import Any, Mapping
 from .api_layer import create_app
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# `desktop.py` lives at the package root, which *is* the repository root.
+REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_DIST = REPO_ROOT / "ui_react" / "dist"
 DEFAULT_ICON = REPO_ROOT / "assets" / "Koakumix.png"
 DEFAULT_TITLE = "Koakumix"
