@@ -67,9 +67,10 @@ def test_splash_delay_only_ever_shortens_the_wait():
     assert splash_delay(0.0, 0.0) == 0.0
 
 
-def test_signature_is_non_empty_and_theme_appropriate():
+def test_signature_is_non_empty():
+    # 不绑定具体文案 —— 签名是用户可改的展示文本。
     assert SIGNATURE.strip()
-    assert "血" in SIGNATURE or "Blood" in SIGNATURE
+    assert len(SIGNATURE) > 8
 
 
 # ------------------------------------------------------------------ TUI 冒烟

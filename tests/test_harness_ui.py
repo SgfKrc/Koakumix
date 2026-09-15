@@ -16,7 +16,10 @@ def test_tui_parser_and_optional_app_contract():
     pytest.importorskip("textual")
     app = create_app(host=args.host, model=args.model)
     assert app.TITLE == "KOAKUMIX"
-    assert app.SUB_TITLE == "血祭血神，颅献颅座"
+    # 副标题与启动页签名同源，避免两处文案漂移。
+    from harness_workbench import splash as splash_module
+
+    assert app.SUB_TITLE == splash_module.SIGNATURE
 
 
 def test_tui_splash_controls_and_khorne_theme():

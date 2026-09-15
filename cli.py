@@ -61,8 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["skill"]:
         return _skill_main(argv[1:])
-    if "--tui" in argv:
-        # 等价于 `koakumix-tui`；在此分流，免得触发本解析器的 --model 必填校验。
+    # 不带参数时默认进 TUI；`--tui` 等价于 `koakumix-tui`。两者都在 parse 之前分流，
+    # 免得触发本解析器的 --model 必填校验。
+    if not argv or "--tui" in argv:
         from .tui import main as tui_main  # noqa: PLC0415
 
         return tui_main([item for item in argv if item != "--tui"])
