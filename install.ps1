@@ -44,15 +44,21 @@ Write-Shim "koakumix-tui" "harness_workbench.tui"
 Write-Shim "koakumix-desktop" "harness_workbench.desktop"
 Write-Host "[2/3] 全局命令已注册（koakumix / koakumix-tui / koakumix-desktop）"
 
-# 3) PATH 注册（幂等：已包含则不动）
+# 3) PATH 注册：把 bin 放到 User PATH 的**最前**（幂等）。
+#    只"追加到末尾"是不够的 —— 系统 Python / conda 的 Scripts 目录常排在前面，若其中恰有
+#    同名 exe（例如早前误装到系统 Python 的 koakumix.exe），它会抢先命中、且可能已损坏。
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($NoPath) {
     Write-Host "[3/3] 跳过 PATH 注册（-NoPath）"
-} elseif ($userPath -notlike "*$binDir*") {
-    [Environment]::SetEnvironmentVariable('Path', "$userPath;$binDir", 'User')
-    Write-Host "[3/3] PATH 已注册: $binDir（新终端生效）"
 } else {
-    Write-Host "[3/3] PATH 已包含: $binDir"
+    $parts = @($userPath -split ';' | Where-Object { $_ -and ($_ -ne $binDir) })
+    $newPath = (@($binDir) + $parts) -join ';'
+    if ($newPath -ne $userPath) {
+        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+        Write-Host "[3/3] PATH 已置顶: $binDir（新终端生效）"
+    } else {
+        Write-Host "[3/3] PATH 已在最前: $binDir"
+    }
 }
 
 # 自检：直接调用刚写的 shim（不依赖 PATH 是否已在新进程中生效）
