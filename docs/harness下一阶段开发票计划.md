@@ -1,6 +1,6 @@
 # Koakumix 下一阶段开发票计划（生图/多模态闭环 + S7 联网+MCP / S8 长期记忆）
 
-> 状态：**`S5-CLOSE-01` 已完成（2026-09-15），本阶段开发票全部走完；支线对齐票 `SIDE-KOAKU-01`（模型舰队合同对齐）、`SIDE-KOAKU-03`（多模态按设备选模）与 `S3.2-MM-01`（多模态追问上下文合同本机门）已完成**——Koakumix 新增 `model_profiles/manifest_bridge.py`（只读主仓资产 manifest → `ModelProfile`，不 import 主仓、不复制加载器）、`model_profiles/fleet_select.py`（按注入的设备能力选 vision/text 模型，缺 vision 能力时降级到文本并明示"图片理解关闭"，绝不强装大模型）与 `image/refs.py`（image asset ref + 有界缩略卡 + 计入预算的多模态追问上下文，超预算显式 `omitted_count`/`truncated`）；`ModelProfile` 增加独立 `format` 字段，`ContextBudget` 增加 `reserve_for_asset_cards()`；真实第三方 MCP 服务、认证与权限仍属于后置验收；前置状态回顾：S1-S4 本机/离线开发门已完成（v10 记录），S6（React 工作台 + Textual TUI）已完成本机开发门；本文档新增三条支线：**Koakumix 生图/多模态闭环、S7（联网搜索 + 轻量 MCP 服务）、S8（小模型长期记忆：RAG + 上下文压缩 + 本地 memory）**。2026-09-14 起，QLH 主项目不再提供生图侧车、远端生成或 SD 资产；相关票只在 Koakumix 侧执行。
+> 状态：**`S5-CLOSE-01` 已完成（2026-09-15），本阶段开发票全部走完；支线对齐票 `SIDE-KOAKU-01`（模型舰队合同对齐）、`SIDE-KOAKU-03`（多模态按设备选模）与合同门 `S3.2-MM-01`（多模态追问上下文）、`S3.2-EDIT-01`（高级编辑契约）已完成**——Koakumix 新增 `model_profiles/manifest_bridge.py`（只读主仓资产 manifest → `ModelProfile`，不 import 主仓、不复制加载器）、`model_profiles/fleet_select.py`（按注入的设备能力选 vision/text 模型，缺 vision 能力时降级到文本并明示"图片理解关闭"，绝不强装大模型）、`image/refs.py`（image asset ref + 有界缩略卡 + 计入预算的多模态追问上下文，超预算显式 `omitted_count`/`truncated`）与 `image/editing.py`（img2img / inpaint / IP-Adapter / instruct 四模式合同与远端映射形状，运行位置如实登记为 `unavailable` / `contract_only`）；`ModelProfile` 增加独立 `format` 字段，`ContextBudget` 增加 `reserve_for_asset_cards()`；**真机生图与真机视觉/编辑适配器仍后置（需 CUDA）**，真实第三方 MCP 服务、认证与权限亦属后置验收；前置状态回顾：S1-S4 本机/离线开发门已完成（v10 记录），S6（React 工作台 + Textual TUI）已完成本机开发门；本文档新增三条支线：**Koakumix 生图/多模态闭环、S7（联网搜索 + 轻量 MCP 服务）、S8（小模型长期记忆：RAG + 上下文压缩 + 本地 memory）**。2026-09-14 起，QLH 主项目不再提供生图侧车、远端生成或 SD 资产；相关票只在 Koakumix 侧执行。
 >
 > 创建日期：2026-09-08
 > 适用范围：harness 子项目下一阶段票；不与 [WEB-TOOL 联网支线](../../docs/archive/联网搜索与轻量Fetch工具调用可行性调研与分期计划.md) 合并（那些是主项目运行时工具，本票是 harness 侧能力与对外服务）；不覆盖训练微调。
@@ -78,7 +78,7 @@ S6 工作台 UI（依赖 S7/S8 的 API 面）───────────�
 | `S3.2-RT-02` | S3.2 红队 | `red_team_blocked`/越权通过率/`schema_valid_rate` 指标接入 evaluation report 与 promotion gate | RT-01 | **已完成本机开发门**；默认 block rate=100%、schema valid≥98%、越权通过=0 |
 | `S3.2-IMG-01` | S3.2 生图 | 独立 executor 生命周期、真实 diffusers/CUDA 适配边界和互斥锁 | RT-01 | **硬件后置**；无 CUDA 时保持 unavailable |
 | `S3.2-MM-01` | S3.2 多模态 | image asset ref、缩略卡和多模态追问上下文合同 | IMG-01 | **已完成本机合同门（2026-09-15）**：`image/refs.py`（`qlh.harness.image_ref.v1` / `qlh.harness.multimodal_context.v1`）——`ImageAssetRef` 只带标识与摘要（无路径、无 base64、无字节）；`render_thumbnail_card()` 产出有界卡（label 夹 48 字、文本 ≤240 字，token 由注入的计数器计算，未注入时标注 `heuristic_estimate`）；`build_multimodal_context()` 将卡片计入 `input_budget`，超预算记 `omitted_count` + `truncated` 并加 notice，绝不静默丢图；`ContextBudget` 新增 `reserve_for_asset_cards()`（`input_budget = align(n_ctx - max_new_tokens - overhead - card_tokens)`）。**真机视觉适配器仍后置**（需 CUDA） |
-| `S3.2-EDIT-01` | S3.2 编辑 | img2img/inpaint/IP-Adapter/指令编辑 contracts 与远端映射 | S3 contracts | 本机契约门；至少一条真机路径后置 |
+| `S3.2-EDIT-01` | S3.2 编辑 | img2img/inpaint/IP-Adapter/指令编辑 contracts 与远端映射 | S3 contracts | **已完成本机契约门（2026-09-15）**：`image/editing.py`（`qlh.harness.image_edit_request.v1`）—— 4 模式合同 `ImageEditRequest`（源图/蒙版/参考图一律用 `ImageAssetRef`，**无字节、无路径**）；按模式 fail-closed 校验必填构件（inpaint 需蒙版且尺寸须与源图一致、ip_adapter 需参考图、instruct 需指令）与值域；`as_remote_payload()` 输出远端编辑形状（`init_image_ref` / `mask_ref` / `ip_adapter_ref` / `strength` / `instruction`）；`manifest_hint()` 让编辑产物经 `ImageAssetStore` 保留血缘；`resolve_edit_availability()` / `edit_capability_matrix()` **如实登记**每条路径的运行位置——本地执行器 `unavailable`、远端 `contract_only`，只有适配器同时声明 `supports_edit` **且** `runtime_available` 才判可用，否则给出明确 reason。**至少一条真机路径仍后置**（需 CUDA） |
 | `S8-MEM-01` | S8 记忆 | 用户-owned SQLite facts/preferences/decisions schema、scope、软删除/失效 | S4 session/RAG | **已完成本机开发门**；独立 memory SQLite、scope 硬过滤、显式删除确认、失效/过期保留审计行 |
 | `S8-MEM-02` | S8 记忆 | FTS5 检索、citation、分层预算与 `omitted_count`/`truncated` | MEM-01 | **已完成本机开发门**；FTS5 scope/lifecycle 过滤、可选 embedding rerank、三层共享预算 |
 | `S8-MEM-03` | S8 记忆 | ContextPolicy 压缩时的事实抽取双写与去重 | MEM-01/02 | **已完成本机开发门**；保守抽取、显式候选覆盖摘要、fingerprint 去重 |
@@ -118,6 +118,7 @@ S6 工作台 UI（依赖 S7/S8 的 API 面）───────────�
 - 2026-09-15：v14 —— 完成 `SIDE-KOAKU-01`（支线票，主仓 `docs/支线开发计划-外置迁移与Koakumix-2026-09-14.md` §S2）：新增 `model_profiles/manifest_bridge.py`，**只读**主仓模型资产 manifest（`.qlh-model-asset.json` / 兼容名 `model.manifest.json`，`schema=1`，2 MiB 大小门）并映射为 `ModelProfile`——model id（`source` 规范化 + 短名别名）、`format`（取自 `model_type`）、`revision`（空值 → `unversioned`）、`artifact_sha256`、tokenizer 与 chat-template 摘要（按 `files[]` 文件名匹配）、`resources`（文件数/字节数）、manifest 摘要进 `evidence`；**不 import 主仓代码、不复制加载器、不启动 sidecar**。`ModelProfile` 新增独立 **`format`** 字段（与 `backend`/engine 分离，用户裁决），`profile_id` 与其余字段语义不变。manifest 无法证明的能力一律 `unknown` 且 `production_eligible=False`（fail-closed）；绝对路径、上溯路径、非小写 64 位摘要、未知 format、超大或非法 manifest 全部拒绝。契约测试 `tests/test_harness_model_fleet.py`，专项 31 passed，Koakumix 全量 **303 passed**（32.0s，零跳过）。
 - 2026-09-15：v15 —— 完成 `SIDE-KOAKU-03`（支线票，同 §S2）：新增 `model_profiles/fleet_select.py`——`DeviceProfile`（platform/accelerator/memory_bytes/vram_bytes，**由调用方注入**，本模块不探测硬件）、`FleetSelector.select(role="answer"|"vision", device=...)`、`FleetSelection.as_dict()`（含 `reasons`、`degradations` 与逐候选 `FleetCandidate`）。准入复用 `CapabilityGate` 的 `answer`/`multimodal` mode：vision 必须 `multimodal=verified`（**`declared` 不够**）；资源门只在 profile **显式声明** `resources.min_vram_bytes`/`min_memory_bytes` 时阻断，未声明则记 `resource_requirement_undeclared` 而不臆断。**可解释降级**：无可用 vision 模型时降级为文本模型（`mode="degraded_text_only"` + `image_understanding_disabled`），文本也不可用才 `available=False`；排序按 gate 状态 → artifact 绑定 → id 保证确定性。专项 `tests/test_harness_model_fleet_select.py` 43 passed，Koakumix 全量 **315 passed**（33.4s，零跳过）。
 - 2026-09-15：v16 —— 完成 `S3.2-MM-01` **本机合同门**：新增 `image/refs.py`（`qlh.harness.image_ref.v1`、`qlh.harness.multimodal_context.v1`）——`ImageAssetRef.from_record()` 从 `ImageAssetStore` 记录构造引用，只含 asset_id/sha256/mime/尺寸/来源/标注，**无路径、无 base64、无字节**（可安全记录与传输）；`render_thumbnail_card()` 产出有界缩略卡（label 夹 48 字、文本 ≤240 字，token 由注入的 `TokenCounter` 计算，未注入时显式标 `heuristic_estimate`）；`build_multimodal_context()` 按预算逐卡纳入，超预算写 `omitted_count` + `truncated=true` + notice（`image_cards_omitted` / `image_context_dropped`），prompt 自身溢出时提前返回并标 `prompt_exceeds_input_budget`，绝不静默丢图。`context_engine/budget.py` 新增 `reserve_for_asset_cards()`，把卡片计入既有 `overhead`：`input_budget = align(n_ctx - max_new_tokens - overhead - card_tokens)`，超限 fail-closed；`MAX_REFS_PER_TURN=4`、`SUPPORTED_MIME_TYPES=(image/png, image/jpeg, image/webp)`。**真机视觉适配器与生图真机仍后置（需 CUDA）**。专项 `tests/test_harness_image_refs.py` 25 passed，Koakumix 全量 **340 passed**（35.6s，零跳过）。
+- 2026-09-15：v17 —— 完成 `S3.2-EDIT-01` **本机契约门**：新增 `image/editing.py`（`qlh.harness.image_edit_request.v1`）——4 模式 `EditModeSpec`（img2img / inpaint / ip_adapter / instruct，各自声明 `requires` / `optional` 与本地、远端状态）与 `ImageEditRequest`（源图 / 蒙版 / 参考图一律 `ImageAssetRef`，**无字节、无路径**；按模式 fail-closed 校验必填构件与值域，inpaint 的蒙版尺寸必须与源图一致）。`as_remote_payload()` 给出远端编辑形状（`init_image_ref` / `mask_ref` / `ip_adapter_ref` / `strength` / `instruction`，传引用而非字节）；`manifest_hint()` 让编辑产物经 `ImageAssetStore` 保留血缘（`edit_mode` / `source_asset_id` / `mask_asset_id` / `reference_asset_id`）。`resolve_edit_availability()` 与 `edit_capability_matrix()` **如实登记运行位置**：本地 `unavailable`、远端 `contract_only`，仅当适配器同时 `supports_edit=True` 且 `runtime_available=True` 才判 `available`，否则逐条给出 reason（`local_edit_executor_unavailable` / `remote_edit_endpoint_not_verified` / `adapter_runtime_not_live`）。**至少一条真机路径仍后置（需 CUDA）**。专项 `tests/test_harness_image_editing.py` 16 passed（同批 refs 25 passed），Koakumix 全量 **356 passed**（30.1s，零跳过）。
 
 ## 9. `S3.2-RT-01` 实施记录
 
@@ -384,3 +385,23 @@ desktop/mobile: MCP navigation, tool call, theme, focus, no overflow passed
 ```
 
 本票完成的是**合同与 fixture 闭环**（`ImageAssetStore` 落盘 → 引用 → 缩略卡 → 追问上下文），**不含真实视觉推理**：真机视觉适配器与生图真机（`S3.2-IMG-01`）仍按硬件可用性后置。
+
+## 23. `S3.2-EDIT-01` 实施记录
+
+本票把四条高级编辑路径落成合同层，不接真机执行器、不内联图片字节：
+
+- 新增 `harness_workbench/image/editing.py`（`qlh.harness.image_edit_request.v1`）。`EDIT_MODE_SPECS` 为 img2img / inpaint / ip_adapter / instruct 各声明 `requires` / `optional` 与本地、远端状态；`ImageEditRequest` 的源图、蒙版、参考图一律是 `ImageAssetRef`（标识 + 摘要），因此请求与远端载荷里**没有字节、没有 base64、没有本地路径**。
+- 按模式 fail-closed：img2img 需 `source`；inpaint 需 `source` + `mask`，且**蒙版尺寸必须与源图一致**（否则会静默改错像素）；ip_adapter 需 `reference`；instruct 需 `source` + `instruction`。值域同样收敛：`strength ∈ [0,1]`、尺寸 64–768 且为 8 的倍数、`steps ∈ [1,100]`、instruction ≤1000 字。
+- `as_remote_payload()` 给出远端编辑形状（`init_image_ref` / `mask_ref` / `ip_adapter_ref` / `strength` / `instruction`），与既有 `ImageRequest.as_remote_payload()` 的 `preset_id` 风格一致；`manifest_hint()` 让编辑产物写入 `ImageAssetStore` 时带上 `edit_mode` 与源/蒙版/参考图的 asset_id，血缘可追溯。
+- `resolve_edit_availability()` 与 `edit_capability_matrix()` 是**诚实登记**：本地执行器在 Koakumix 一直是显式 `unavailable`，远端编辑端点尚无已验收实现（`contract_only`），因此四条路径当前一律 `available=False` 并给出 reason（`local_edit_executor_unavailable`、`remote_edit_endpoint_not_verified`）。只有适配器同时声明 `supports_edit=True` 且 `runtime_available=True` 时，远端才翻为 `available`。
+
+验证证据：
+
+```text
+.\.venv-test\Scripts\python.exe -m pytest tests/test_harness_image_editing.py tests/test_harness_image_refs.py -q
+41 passed
+.\.venv-test\Scripts\python.exe -m pytest (Get-ChildItem tests -Filter 'test_harness_*.py').FullName -q
+356 passed
+```
+
+本票是**契约门**：真机路径（img2img 或 inpaint 的至少一条）仍按硬件可用性后置，与 `S3.2-IMG-01`（真实 diffusers/CUDA 执行器）一并验收。
