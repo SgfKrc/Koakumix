@@ -4,7 +4,7 @@
 
 # Koakumix
 
-> **Language**: 简体中文 · English (planned)
+> **Language**: 简体中文 · [English](README.en.md)
 
 Koakumix 是 QLH 项目的**小模型本地增强对话 harness**（原 `harness_workbench/`，2026-09-15 迁出为独立子模块）。
 
@@ -23,6 +23,7 @@ Koakumix 是 QLH 项目的**小模型本地增强对话 harness**（原 `harness
 | `mcp_server/` | MCP 工具面（含 `image_generate`） |
 | `model_profiles/` | 模型画像与小模型档位 |
 | `cli.py` `tui.py` | 命令行与 TUI 入口 |
+| `desktop.py` | **桌面壳**（pywebview：本地起 API 并把系统 WebView 指向它；`desktop` extra 可选，窗口图标取 `assets/Koakumix.png`） |
 | `ui_react/` | 可选 Web UI（`node_modules` 本地重建，不入库） |
 
 **图像生成的唯一归属在本仓库**（QLH 主仓已于 `d18cee7` 裁撤 SD 1.5 全链，只保留可选的多模态**理解**）。
@@ -39,6 +40,15 @@ MCP 工具面（stdio）：
 
 ```bash
 python -m harness_workbench.mcp_server
+```
+
+桌面壳（pywebview）：
+
+```bash
+cd ui_react && npm install && npm run build   # 先构建前端（dist 不入库）
+pip install -e ".[desktop]"                    # 可选依赖：pywebview + fastapi + uvicorn
+koakumix-desktop --check                       # 就绪自检（不开窗口、不需要模型）
+koakumix-desktop --model path/to/model.gguf    # 起本地 API 并打开桌面窗口
 ```
 
 ## 测试

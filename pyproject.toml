@@ -13,9 +13,12 @@ dependencies = []
 
 [project.optional-dependencies]
 tui = ["textual>=8.2"]
+api = ["fastapi>=0.110", "uvicorn>=0.30"]
+desktop = ["pywebview>=5.0", "fastapi>=0.110", "uvicorn>=0.30"]
 
 [project.scripts]
 koakumix = "harness_workbench.cli:main"
+koakumix-desktop = "harness_workbench.desktop:main"
 
 [tool.setuptools]
 package-dir = { "harness_workbench" = "." }
