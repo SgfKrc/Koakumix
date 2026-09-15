@@ -102,6 +102,40 @@ def test_submitting_a_message_does_not_crash():
     assert "帮我写个短小的俳句" in captured[0], "输入应写入 transcript，且不得抛异常"
 
 
+def test_nav_switches_panels_and_back_to_chat():
+    """回归守卫：左栏导航此前没有任何处理函数（点击/回车都无反应）。
+    现在应能在对话与只读面板之间切换，且回到对话时输入框恢复。"""
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.query_one("#transcript-scroll").display is True
+            assert app.query_one("#panel").display is False
+
+            app.action_nav(1)  # 知识库
+            await pilot.pause()
+            assert app.query_one("#transcript-scroll").display is False
+            assert app.query_one("#composer").display is False
+            assert app.query_one("#panel").display is True
+            assert "知识库" in str(app.query_one("#panel").content)
+
+            app.action_nav(3)  # 运行时
+            await pilot.pause()
+            assert "运行时" in str(app.query_one("#panel").content)
+
+            app.action_nav(0)  # 回到对话
+            await pilot.pause()
+            assert app.query_one("#transcript-scroll").display is True
+            assert app.query_one("#composer").display is True
+
+    asyncio.run(scenario())
+
+
 def test_react_ui_is_independent_and_uses_non_green_cyber_accent():
     package = (UI_ROOT / "package.json").read_text(encoding="utf-8")
     styles = (UI_ROOT / "src" / "styles.css").read_text(encoding="utf-8")

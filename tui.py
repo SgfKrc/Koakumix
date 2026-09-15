@@ -10,6 +10,9 @@
 一个内嵌 harness API（复用 :mod:`harness_workbench.desktop` 的装配：QLH 主项目优先，
 否则自起 llama-server）。避免一进来就退化成 FIXTURE 离线态。
 
+左栏导航（对话 / 知识库 / 资产 / 运行时）会切换主区内容；对话页的新消息会自动滚动到底
+（否则长会话只看到顶部那截，看起来像"没有回应"）。
+
 启动动画与 ``--no-splash`` / ``--splash-time`` 语义不变；非 TTY 自动跳过。
 """
 
@@ -24,6 +27,13 @@ from typing import Any
 
 DEFAULT_HOST = "http://127.0.0.1:8090"
 QLH_BASE_URL = "http://127.0.0.1:8000"
+
+NAV_ITEMS: tuple[tuple[str, str], ...] = (
+    ("chat", "对话"),
+    ("library", "知识库"),
+    ("assets", "资产"),
+    ("runtime", "运行时"),
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -123,7 +133,7 @@ def start_local_backend(*, model_path: str | None, llama_exe: str | None, qlh_ba
 
 
 def _probe(host: str) -> dict[str, Any]:
-    """Collect the first screen's data.  Pure I/O: never touches widgets."""
+    """Collect the panels' data.  Pure I/O: never touches widgets."""
 
     data: dict[str, Any] = {}
     try:
@@ -135,12 +145,14 @@ def _probe(host: str) -> dict[str, Any]:
     try:
         rag = _request_json(host, "/v1/rag/health")
         data["rag"] = f"RAG {rag.get('backend', 'unknown')} / {rag.get('chunks', 0)} chunks"
+        data["rag_raw"] = rag
     except RuntimeError:
         data["rag"] = "RAG unavailable"
     try:
         image = _request_json(host, "/v1/images/capabilities")
         ready = bool(image.get("runtime_available")) and bool(image.get("supports_txt2img"))
         data["image"] = "TXT2IMG ready" if ready else "TXT2IMG blocked"
+        data["image_raw"] = image
     except RuntimeError:
         data["image"] = "TXT2IMG unavailable"
     try:
@@ -175,7 +187,7 @@ def create_app(
 ) -> Any:
     try:
         from textual.app import App, ComposeResult
-        from textual.containers import Horizontal, Vertical
+        from textual.containers import Horizontal, Vertical, VerticalScroll
         from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
 
         from .splash import SplashScreen
@@ -196,7 +208,9 @@ def create_app(
         #status { height: 1; color: #58a6ff; }
         #utility-status { height: auto; color: #8b949e; padding: 1 0; }
         #banner { color: #bc8cff; height: auto; padding: 0 0 1 0; }
-        #transcript { height: 1fr; padding: 1 0; overflow-y: auto; border-top: solid #30363d; }
+        #transcript-scroll { height: 1fr; border-top: solid #30363d; }
+        #transcript { height: auto; padding: 1 0; }
+        #panel { display: none; height: 1fr; border-top: solid #30363d; padding: 1 0; overflow-y: auto; }
         #composer { dock: bottom; height: 3; border: solid #30363d; background: #0d1117; }
         ListView { height: auto; max-height: 8; background: #161b22; }
         ListItem { padding: 0 1; color: #8b949e; background: #161b22; }
@@ -207,12 +221,14 @@ def create_app(
         Button { background: #21262d; color: #c9d1d9; border: solid #30363d; }
         Button:focus { background: #30363d; border: solid #58a6ff; }
         .label { color: #8b949e; text-style: bold; padding: 1 0 0 0; }
-        .you { color: #c9d1d9; }
-        .kumix { color: #58a6ff; }
         .muted { color: #6e7681; }
         """
 
         BINDINGS = [
+            ("1", "nav(0)", "对话"),
+            ("2", "nav(1)", "知识库"),
+            ("3", "nav(2)", "资产"),
+            ("4", "nav(3)", "运行时"),
             ("m", "reload_models", "刷新模型"),
             ("n", "new_session", "新建会话"),
             ("q", "quit", "退出"),
@@ -229,6 +245,8 @@ def create_app(
             self._models: list[dict[str, Any]] = []
             self._current_model: str | None = None
             self._shell: Any | None = None
+            self._nav = 0
+            self._boot: dict[str, Any] = {}
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -236,10 +254,11 @@ def create_app(
                 with Vertical(id="rail"):
                     yield Label("WORKSPACE", classes="label")
                     yield ListView(
-                        ListItem(Label("▸ 对话")),
-                        ListItem(Label("  知识库")),
-                        ListItem(Label("  资产")),
-                        ListItem(Label("  运行时")),
+                        *[
+                            ListItem(Label(f"{'▸' if i == 0 else ' '} {title}"), name=key)
+                            for i, (key, title) in enumerate(NAV_ITEMS)
+                        ],
+                        id="nav-list",
                     )
                     yield Label("MODEL", classes="label")
                     yield ListView(id="model-list")
@@ -251,7 +270,9 @@ def create_app(
                 with Vertical(id="main"):
                     yield Static("CHECKING · harness API", id="status")
                     yield Static("Evangelium vom Himmelsturz.", id="banner")
-                    yield Static("KOAKUMIX\n\n等待一条消息。", id="transcript")
+                    with VerticalScroll(id="transcript-scroll"):
+                        yield Static("KOAKUMIX\n\n等待一条消息。", id="transcript")
+                    yield Static("", id="panel")
                     yield Input(placeholder="输入消息，回车发送…", id="composer")
             yield Footer()
 
@@ -300,6 +321,7 @@ def create_app(
         def _apply_boot(self, note: str, data: dict[str, Any]) -> None:
             status = self.query_one("#status", Static)
             utility = self.query_one("#utility-status", Static)
+            self._boot = data
             if data.get("error"):
                 status.update("OFFLINE · 后端未连接（发送消息只会记录输入）")
                 utility.update(
@@ -317,6 +339,7 @@ def create_app(
                 self._render_models()
                 if self._sessions:
                     self._select_session(str(self._sessions[0].get("session_id", "")))
+            self._render_nav()
             self._close_splash()
 
         def _close_splash(self) -> None:
@@ -326,6 +349,81 @@ def create_app(
                     screen.notify_loaded()
                 except Exception:  # noqa: BLE001 - screen already gone
                     pass
+
+        # ---- transcript：唯一写入口，写完滚到底 ----
+        def _set_transcript(self, text: str) -> None:
+            """Single writer for the transcript, keeping the newest line in view.
+
+            Without the explicit scroll the view stays at the top, so a long session looks
+            like "the model never answered" — the reply is simply below the fold.
+            """
+
+            self.query_one("#transcript", Static).update(text)
+            try:
+                self.query_one("#transcript-scroll").scroll_end(animate=False)
+            except Exception:  # noqa: BLE001 - container not mounted yet
+                pass
+
+        def _transcript_text(self) -> str:
+            # Textual 8.x 的 Static 没有 .renderable；正文用官方属性 .content 读回。
+            return str(self.query_one("#transcript", Static).content or "")
+
+        # ---- navigation ----
+        def action_nav(self, index: int) -> None:
+            self._nav = max(0, min(index, len(NAV_ITEMS) - 1))
+            self._render_nav()
+
+        def _render_nav(self) -> None:
+            """Switch the main area between the chat view and the read-only panels."""
+
+            chatting = self._nav == 0
+            self.query_one("#transcript-scroll").display = chatting
+            self.query_one("#composer").display = chatting
+            panel = self.query_one("#panel", Static)
+            panel.display = not chatting
+            self._mark_nav()
+            if chatting:
+                return
+            builders = (self._library_panel, self._assets_panel, self._runtime_panel)
+            panel.update(builders[self._nav - 1]())
+
+        def _mark_nav(self) -> None:
+            view = self.query_one("#nav-list", ListView)
+            for i, (key, title) in enumerate(NAV_ITEMS):
+                if i < len(view.children):
+                    view.children[i].query_one(Label).update(f"{'▸' if i == self._nav else ' '} {title}")
+
+        def _library_panel(self) -> str:
+            rag = self._boot.get("rag_raw") or {}
+            return (
+                "知识库（RAG）\n\n"
+                f"后端   : {rag.get('backend', 'unavailable')}\n"
+                f"分块数 : {rag.get('chunks', 0)}\n"
+                f"摘要   : {self._boot.get('rag', 'RAG unavailable')}\n\n"
+                "会话内检索由对话页自动带上下文；此面板只读展示当前索引状态。"
+            )
+
+        def _assets_panel(self) -> str:
+            image = self._boot.get("image_raw") or {}
+            rows = [f"已注册模型 : {len(self._models)}"]
+            if self._current_model:
+                rows.append(f"当前模型   : {self._current_model}")
+            rows.append(f"图像运行时 : {self._boot.get('image', 'unavailable')}")
+            if image:
+                rows.append(f"  txt2img  : {bool(image.get('supports_txt2img'))}")
+                rows.append(f"  runtime  : {bool(image.get('runtime_available'))}")
+            lines = "\n".join(rows)
+            return f"资产\n\n{lines}\n\n模型列表在左栏 MODEL 区，选中即可切换。"
+
+        def _runtime_panel(self) -> str:
+            return (
+                "运行时\n\n"
+                f"后端地址 : {self._host}\n"
+                f"后端类型 : {self._boot.get('backend', 'unavailable')}\n"
+                f"内嵌后端 : {'是（本 TUI 拉起）' if self._shell is not None else '否（复用外部服务）'}\n"
+                f"会话数   : {len(self._sessions)}\n"
+                f"模型数   : {len(self._models)}"
+            )
 
         # ---- models ----
         def _render_models(self) -> None:
@@ -347,6 +445,8 @@ def create_app(
                 return
             self._models = [item for item in assets.get("models", []) if isinstance(item, dict)]
             self._render_models()
+            if self._nav == 2:
+                self._render_nav()
 
         def _switch_model(self, model_id: str) -> None:
             if not model_id:
@@ -386,12 +486,15 @@ def create_app(
             for message in payload.get("messages", []):
                 role = str(message.get("role", "system")).upper()
                 lines.append(f"{role}\n{message.get('content', '')}")
-            self.query_one("#transcript", Static).update("\n\n".join(lines) or "KOAKUMIX\n\n等待一条消息。")
+            self._set_transcript("\n\n".join(lines) or "KOAKUMIX\n\n等待一条消息。")
 
         def on_list_view_selected(self, event: Any) -> None:
             which = getattr(event.list_view, "id", None)
             name = str(getattr(event.item, "name", ""))
-            if which == "session-list":
+            if which == "nav-list":
+                index = next((i for i, (key, _) in enumerate(NAV_ITEMS) if key == name), 0)
+                self.action_nav(index)
+            elif which == "session-list":
                 self._select_session(name)
             elif which == "model-list":
                 self._switch_model(name)
@@ -416,7 +519,9 @@ def create_app(
             except RuntimeError:
                 self._sessions = []
             self._render_sessions()
-            self.query_one("#transcript", Static).update("KOAKUMIX\n\n等待一条消息。")
+            if self._nav != 0:
+                self.action_nav(0)
+            self._set_transcript("KOAKUMIX\n\n等待一条消息。")
 
         # ---- chat ----
         def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -424,11 +529,9 @@ def create_app(
             if not text:
                 return
             event.input.value = ""
-            transcript = self.query_one("#transcript", Static)
-            # Textual 8.x 的 Static 没有 .renderable；正文用官方属性 .content 读回。
-            current = str(transcript.content or "")
             status = self.query_one("#status", Static)
             status.update("THINKING · 生成中…")
+            current = self._transcript_text()
             try:
                 if self._session_id:
                     _request_json(
@@ -449,10 +552,11 @@ def create_app(
                         f"/v1/sessions/{self._session_id}/messages",
                         {"owner_scope": "local", "role": "assistant", "content": answer},
                     )
-                transcript.update(current + f"\n\nYOU\n{text}\n\nKOAKUMIX\n{answer}")
+                body = answer if answer.strip() else "（模型返回了空内容）"
+                self._set_transcript(current + f"\n\nYOU\n{text}\n\nKOAKUMIX\n{body}")
                 status.update("ONLINE · 就绪")
             except (RuntimeError, IndexError, AttributeError, TypeError):
-                transcript.update(current + f"\n\nYOU\n{text}\n\n（后端未连接：已记录输入，未调用模型）")
+                self._set_transcript(current + f"\n\nYOU\n{text}\n\n（后端未连接：已记录输入，未调用模型）")
                 status.update("OFFLINE · 后端未连接")
 
     return HarnessApp()
@@ -476,4 +580,12 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
-__all__ = ["DEFAULT_HOST", "QLH_BASE_URL", "build_parser", "create_app", "main", "start_local_backend"]
+__all__ = [
+    "DEFAULT_HOST",
+    "NAV_ITEMS",
+    "QLH_BASE_URL",
+    "build_parser",
+    "create_app",
+    "main",
+    "start_local_backend",
+]
