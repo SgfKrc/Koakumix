@@ -13,8 +13,9 @@
 左栏导航（对话 / 知识库 / MCP / 资产 / 运行时）切换主区内容：
 - 对话页：新消息自动滚动到底（否则长会话只看到顶部那截，像"没有回应"）；
 - 知识库页：**可检索**（``POST /v1/rag/search``）**可入库**（``POST /v1/rag/sources``）；
-- MCP 页：列出内置工具（``GET /v1/mcp/tools``），选中后按 JSON 参数调用
-  （``POST /v1/mcp/call``）。
+- MCP 页：列出内置工具（``GET /v1/mcp/tools``），选中后按 JSON 参数调用（``/v1/mcp/call``）；
+- 资产页：给提示词**生成图片**（``POST /v1/images/generations``）。终端无法内嵌显示图片，
+  因此生成结果**落盘**并在面板上报告路径与元数据。
 
 启动动画与 ``--no-splash`` / ``--splash-time`` 语义不变；非 TTY 自动跳过。
 """
@@ -22,8 +23,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import threading
+import time as _time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -31,6 +34,9 @@ from typing import Any
 
 DEFAULT_HOST = "http://127.0.0.1:8090"
 QLH_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_IMAGE_SIZE = "512x512"
+DEFAULT_IMAGE_STEPS = 28
+MIME_SUFFIXES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
 
 NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("chat", "对话"),
@@ -56,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--splash-time", type=float, default=1.0, help="启动动画最小展示秒数（默认 1.0）")
     parser.add_argument("--rag-limit", type=int, default=8, help="知识库检索返回条数上限（默认 8）")
     parser.add_argument("--rag-mode", default="fts", choices=RAG_INDEX_MODES, help="知识库检索模式（默认 fts）")
+    parser.add_argument("--image-dir", default=None, help="生成图片的落盘目录（默认 %%LOCALAPPDATA%%\\Koakumix\\images）")
+    parser.add_argument("--image-size", default=DEFAULT_IMAGE_SIZE, help=f"生成尺寸 WxH（默认 {DEFAULT_IMAGE_SIZE}）")
+    parser.add_argument("--image-steps", type=int, default=DEFAULT_IMAGE_STEPS, help=f"采样步数（默认 {DEFAULT_IMAGE_STEPS}）")
     return parser
 
 
@@ -359,6 +368,90 @@ def parse_mcp_arguments(raw: str) -> dict[str, Any]:
     return value
 
 
+def parse_image_size(raw: str) -> tuple[int, int]:
+    """Parse ``WxH`` into ``(width, height)``; raise ``ValueError`` when unusable."""
+
+    text = raw.strip().lower().replace("*", "x").replace("×", "x")
+    if "x" not in text:
+        raise ValueError(f"尺寸格式应为 WxH（如 512x512），收到: {raw!r}")
+    left, _, right = text.partition("x")
+    try:
+        width, height = int(left), int(right)
+    except ValueError as exc:
+        raise ValueError(f"尺寸必须是整数: {raw!r}") from exc
+    if not (64 <= width <= 2048 and 64 <= height <= 2048):
+        raise ValueError(f"尺寸需在 64..2048 之间，收到 {width}x{height}")
+    return width, height
+
+
+def image_output_dir(explicit: str | None = None) -> Path:
+    """Where generated images land: explicit dir, else the shared Koakumix data dir."""
+
+    if explicit:
+        return Path(explicit).expanduser()
+    try:
+        from .desktop import default_data_dir
+
+        base = default_data_dir()
+    except Exception:  # pragma: no cover - desktop module always importable here
+        base = Path.home() / ".koakumix"
+    return Path(base) / "images"
+
+
+def save_generated_image(item: dict[str, Any], out_dir: Path, *, stamp: str | None = None) -> Path:
+    """Decode a ``b64_json`` payload and write it under ``out_dir``; return the path.
+
+    A terminal cannot show a picture, so the only useful thing to do with one is put it on
+    disk and report the path.
+    """
+
+    raw = item.get("b64_json")
+    if not isinstance(raw, str) or not raw:
+        raise ValueError("响应里没有 b64_json（可用 response_format=url 改走资产库）")
+    try:
+        blob = base64.b64decode(raw, validate=True)
+    except Exception as exc:  # noqa: BLE001 - binascii.Error and friends
+        raise ValueError(f"b64_json 解码失败: {exc}") from exc
+    if not blob:
+        raise ValueError("解码后得到空数据")
+
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    mime = str(metadata.get("mime_type") or "image/png")
+    suffix = MIME_SUFFIXES.get(mime, ".png")
+    seed = metadata.get("seed")
+    tag = f"-seed{seed}" if isinstance(seed, int) else ""
+    name = f"koakumix-{stamp or _time.strftime('%Y%m%d-%H%M%S')}{tag}{suffix}"
+
+    target_dir = Path(out_dir).expanduser()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / name
+    path.write_bytes(blob)
+    return path
+
+
+def format_image_result(path: Path, item: dict[str, Any], *, prompt: str = "") -> str:
+    """Render the generation outcome (pure, testable)."""
+
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    lines = ["资产 · 图像生成", ""]
+    if prompt:
+        lines.append(f"提示词 : {prompt[:160]}{'…' if len(prompt) > 160 else ''}")
+    lines.append(f"已保存 : {path}")
+    lines.append(f"字节数 : {path.stat().st_size if path.exists() else 0}")
+    if isinstance(item.get("asset_id"), str):
+        lines.append(f"资产 ID : {item['asset_id']}")
+    for key in ("width", "height", "steps", "guidance_scale", "seed", "mime_type", "backend_id"):
+        value = metadata.get(key)
+        if value is not None:
+            lines.append(f"{key:<14}: {value}")
+    if metadata:
+        listed = ", ".join(sorted(str(k) for k in metadata))
+        lines.append(f"元数据字段    : {listed}")
+    lines.append("")
+    lines.append("终端无法内嵌显示图片，请用系统图片查看器打开上面的路径。")
+    return "\n".join(lines)
+
+
 def read_source_file(target: str) -> tuple[str, str]:
     """Read a text file for ingestion; return ``(title, text)``.
 
@@ -391,6 +484,9 @@ def create_app(
     qlh_base_url: str = QLH_BASE_URL,
     rag_limit: int = 8,
     rag_mode: str = "fts",
+    image_dir: str | None = None,
+    image_size: str = DEFAULT_IMAGE_SIZE,
+    image_steps: int = DEFAULT_IMAGE_STEPS,
 ) -> Any:
     try:
         from textual.app import App, ComposeResult
@@ -424,6 +520,7 @@ def create_app(
         #rag-query { display: none; border: solid #30363d; background: #0d1117; }
         #rag-add { display: none; border: solid #30363d; background: #0d1117; }
         #mcp-args { display: none; border: solid #30363d; background: #0d1117; }
+        #image-prompt { display: none; border: solid #30363d; background: #0d1117; }
         #composer { dock: bottom; height: 3; border: solid #30363d; background: #0d1117; }
         ListView { height: auto; max-height: 8; background: #161b22; }
         ListItem { padding: 0 1; color: #8b949e; background: #161b22; }
@@ -468,6 +565,10 @@ def create_app(
             self._last_source = ""
             self._mcp_tools: list[dict[str, Any]] = []
             self._mcp_tool: str = ""
+            self._image_dir = image_dir
+            self._image_size = str(image_size)
+            self._image_steps = int(image_steps)
+            self._last_image: str = ""
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -500,6 +601,7 @@ def create_app(
                         yield Input(placeholder="检索知识库…（回车执行）", id="rag-query")
                         yield Input(placeholder="入库：本地文档路径…（回车读取并索引）", id="rag-add")
                         yield Input(placeholder="MCP 参数（JSON）…（回车调用）", id="mcp-args")
+                        yield Input(placeholder="图像提示词…（回车生成并保存到本地）", id="image-prompt")
                     yield Input(placeholder="输入消息，回车发送…", id="composer")
             yield Footer()
 
@@ -631,6 +733,7 @@ def create_app(
             chatting = self._nav == 0
             on_library = self._nav == 1
             on_mcp = self._nav == 2
+            on_assets = self._nav == 3
             self.query_one("#transcript-scroll").display = chatting
             self.query_one("#composer").display = chatting
             self.query_one("#panel").display = not chatting
@@ -639,6 +742,7 @@ def create_app(
             self.query_one("#rag-add").display = on_library
             self.query_one("#mcp-tool-list").display = on_mcp
             self.query_one("#mcp-args").display = on_mcp
+            self.query_one("#image-prompt").display = on_assets
             self._mark_nav()
             if chatting:
                 return
@@ -689,10 +793,17 @@ def create_app(
                 rows.append(f"当前模型   : {self._current_model}")
             rows.append(f"图像运行时 : {self._boot.get('image', 'unavailable')}")
             rows.append(f"MCP 工具数 : {len(self._mcp_tools)}")
+            rows.append(f"生成尺寸   : {self._image_size} · 步数 {self._image_steps}")
+            rows.append(f"输出目录   : {image_output_dir(self._image_dir)}")
             if image:
                 rows.append(f"  txt2img  : {bool(image.get('supports_txt2img'))}")
                 rows.append(f"  runtime  : {bool(image.get('runtime_available'))}")
-            return "资产\n\n" + "\n".join(rows) + "\n\n模型列表在左栏 MODEL 区，选中即可切换。"
+            if self._last_image:
+                rows.append(f"最近生成   : {self._last_image}")
+            rows.append("")
+            rows.append("在下方提示词框输入描述并回车即可生成（POST /v1/images/generations），")
+            rows.append("图片会保存到上面的输出目录。")
+            return "资产\n\n" + "\n".join(rows)
 
         def _runtime_panel(self) -> str:
             return (
@@ -702,7 +813,8 @@ def create_app(
                 f"内嵌后端 : {'是（本 TUI 拉起）' if self._shell is not None else '否（复用外部服务）'}\n"
                 f"会话数   : {len(self._sessions)}\n"
                 f"模型数   : {len(self._models)}\n"
-                f"MCP 工具 : {len(self._mcp_tools)}"
+                f"MCP 工具 : {len(self._mcp_tools)}\n"
+                f"图像输出 : {image_output_dir(self._image_dir)}"
             )
 
         # ---- knowledge base ----
@@ -777,6 +889,54 @@ def create_app(
             self._set_panel(format_add_result(str(Path(target).expanduser()), title, text, result))
             status.update(f"ONLINE · 已入库 {title}")
 
+        # ---- assets：图像生成 ----
+        def _generate_image(self, prompt: str) -> None:
+            if not prompt:
+                self._set_panel(self._assets_panel())
+                return
+            status = self.query_one("#status", Static)
+            try:
+                width, height = parse_image_size(self._image_size)
+            except ValueError as exc:
+                self._set_panel(f"资产 · 图像生成\n\n参数错误：{exc}")
+                status.update("OFFLINE · 图像尺寸参数错误")
+                return
+            status.update("GENERATING · 图像生成中（可能几十秒）")
+            self._set_panel(f"资产 · 图像生成\n\n提示词：{prompt[:120]}\n\n生成中…")
+            try:
+                payload = _request_json(
+                    self._host,
+                    "/v1/images/generations",
+                    {
+                        "prompt": prompt,
+                        "width": width,
+                        "height": height,
+                        "steps": self._image_steps,
+                        "response_format": "b64_json",
+                    },
+                    timeout=300.0,
+                )
+            except RuntimeError as exc:
+                self._set_panel(f"资产 · 图像生成\n\n生成失败：{exc}")
+                status.update("OFFLINE · 图像生成失败")
+                return
+
+            rows = payload.get("data")
+            item = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+            if item is None:
+                self._set_panel("资产 · 图像生成\n\n响应里没有 data[0]，无法取图。")
+                status.update("OFFLINE · 图像响应异常")
+                return
+            try:
+                path = save_generated_image(item, image_output_dir(self._image_dir))
+            except ValueError as exc:
+                self._set_panel(f"资产 · 图像生成\n\n保存失败：{exc}")
+                status.update("OFFLINE · 图像保存失败")
+                return
+            self._last_image = str(path)
+            self._set_panel(format_image_result(path, item, prompt=prompt))
+            status.update(f"ONLINE · 已生成 {path.name}")
+
         # ---- MCP ----
         def _render_mcp_tools(self) -> None:
             view = self.query_one("#mcp-tool-list", ListView)
@@ -821,7 +981,6 @@ def create_app(
                         description or "(无描述)",
                         "",
                         "参数已填入下方输入框（只含必填字段）。补齐后回车调用。",
-                        "多行 JSON 可先用默认骨架改成单行，或直接编辑后回车。",
                     ]
                 )
             )
@@ -955,7 +1114,7 @@ def create_app(
                 self.action_nav(0)
             self._set_transcript("KOAKUMIX\n\n等待一条消息。")
 
-        # ---- inputs：检索框 / 入库框 / MCP 参数框 / 对话框 分流 ----
+        # ---- inputs：检索 / 入库 / MCP 参数 / 图像提示词 / 对话 分流 ----
         def on_input_submitted(self, event: Input.Submitted) -> None:
             widget_id = getattr(event.input, "id", None)
             text = event.value.strip()
@@ -970,6 +1129,10 @@ def create_app(
             if widget_id == "mcp-args":
                 # 参数框保留原值：允许在同一次会话里微调后重复调用。
                 self._call_mcp(event.value)
+                return
+            if widget_id == "image-prompt":
+                event.input.value = ""
+                self._generate_image(text)
                 return
             if not text:
                 return
@@ -1021,6 +1184,9 @@ def main(argv: list[str] | None = None) -> int:
         splash_min=args.splash_time,
         rag_limit=args.rag_limit,
         rag_mode=args.rag_mode,
+        image_dir=args.image_dir,
+        image_size=args.image_size,
+        image_steps=args.image_steps,
     )
     app.run()
     return 0
@@ -1032,6 +1198,8 @@ if __name__ == "__main__":  # pragma: no cover
 
 __all__ = [
     "DEFAULT_HOST",
+    "DEFAULT_IMAGE_SIZE",
+    "DEFAULT_IMAGE_STEPS",
     "MAX_SOURCE_BYTES",
     "NAV_ITEMS",
     "QLH_BASE_URL",
@@ -1039,12 +1207,16 @@ __all__ = [
     "build_parser",
     "create_app",
     "format_add_result",
+    "format_image_result",
     "format_mcp_result",
     "format_rag_result",
+    "image_output_dir",
     "main",
     "mcp_arguments_template",
+    "parse_image_size",
     "parse_mcp_arguments",
     "read_source_file",
+    "save_generated_image",
     "start_local_backend",
     "tool_schema",
 ]

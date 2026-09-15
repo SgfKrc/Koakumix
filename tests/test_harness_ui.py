@@ -351,6 +351,75 @@ def test_mcp_page_lists_tools_and_calls_selected():
     asyncio.run(scenario())
 
 
+def test_parse_image_size_accepts_common_forms_and_rejects_junk():
+    from harness_workbench import tui
+
+    assert tui.parse_image_size("512x512") == (512, 512)
+    assert tui.parse_image_size("768*512") == (768, 512)
+    with pytest.raises(ValueError, match="WxH"):
+        tui.parse_image_size("512")
+    with pytest.raises(ValueError, match="整数"):
+        tui.parse_image_size("axb")
+    with pytest.raises(ValueError, match="64..2048"):
+        tui.parse_image_size("16x16")
+
+
+def test_save_generated_image_writes_a_real_file(tmp_path):
+    """终端显示不了图片，所以要真落盘并报路径 —— 这里验证它确实写了。"""
+
+    import base64
+
+    from harness_workbench import tui
+
+    blob = b"\x89PNG\r\n\x1a\n" + b"z" * 32
+    item = {"b64_json": base64.b64encode(blob).decode(), "metadata": {"seed": 11, "mime_type": "image/png"}}
+    path = tui.save_generated_image(item, tmp_path, stamp="20260101-000000")
+
+    assert path.parent == tmp_path
+    assert path.name == "koakumix-20260101-000000-seed11.png"
+    assert path.read_bytes() == blob
+
+    with pytest.raises(ValueError, match="b64_json"):
+        tui.save_generated_image({}, tmp_path)
+
+
+def test_image_output_dir_defaults_under_the_koakumix_data_dir(tmp_path):
+    from harness_workbench import tui
+
+    assert tui.image_output_dir(str(tmp_path)) == tmp_path
+    assert tui.image_output_dir(None).name == "images"
+
+
+def test_assets_panel_can_generate_an_image(tmp_path):
+    """资产页应带提示词框，并把请求打到 /v1/images/generations。"""
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False, image_dir=str(tmp_path))
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_nav(3)
+            await pilot.pause()
+            assert app.query_one("#image-prompt").display is True, "资产页应有提示词框"
+
+            box = app.query_one("#image-prompt")
+            box.focus()
+            await pilot.pause()
+            box.value = "a red star"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "图像生成" in str(app.query_one("#panel-text").content)
+
+            app.action_nav(0)
+            await pilot.pause()
+            assert app.query_one("#image-prompt").display is False, "对话页不应显示提示词框"
+
+    asyncio.run(scenario())
+
+
 def test_react_ui_is_independent_and_uses_non_green_cyber_accent():
     package = (UI_ROOT / "package.json").read_text(encoding="utf-8")
     styles = (UI_ROOT / "src" / "styles.css").read_text(encoding="utf-8")
