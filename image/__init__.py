@@ -16,18 +16,44 @@ from .contracts import (
 )
 from .local_engine import LocalImageEngine, LocalImageEngineConfig
 from .manifest import AssetManifestReport, validate_asset_manifest
+from .refs import (
+    IMAGE_REF_SCHEMA,
+    MAX_CARD_CHARS,
+    MAX_PROMPT_CHARS,
+    MAX_REFS_PER_TURN,
+    MULTIMODAL_CONTEXT_SCHEMA,
+    SUPPORTED_MIME_TYPES,
+    ImageAssetRef,
+    ImageRefError,
+    MultimodalContext,
+    ThumbnailCard,
+    build_multimodal_context,
+    render_thumbnail_card,
+)
 
 __all__ = [
+    "IMAGE_REF_SCHEMA",
+    "MAX_CARD_CHARS",
+    "MAX_PROMPT_CHARS",
+    "MAX_REFS_PER_TURN",
+    "MULTIMODAL_CONTEXT_SCHEMA",
+    "SUPPORTED_MIME_TYPES",
     "AssetManifestReport",
     "GeneratedImage",
     "ImageAdapter",
     "ImageAdapterCapabilities",
     "ImageAdapterError",
     "ImageAssetRecord",
+    "ImageAssetRef",
     "ImageAssetStore",
+    "ImageRefError",
     "ImageRequest",
     "ImageRequestError",
     "LocalImageEngine",
     "LocalImageEngineConfig",
+    "MultimodalContext",
+    "ThumbnailCard",
+    "build_multimodal_context",
+    "render_thumbnail_card",
     "validate_asset_manifest",
 ]

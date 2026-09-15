@@ -68,3 +68,27 @@ class ContextBudget:
             "alignment": self.alignment,
             "input_budget": self.input_budget,
         }
+
+
+def reserve_for_asset_cards(budget: ContextBudget, card_tokens: int) -> ContextBudget:
+    """Return a budget whose ``overhead`` already pays for image thumbnail cards.
+
+    S3.2-MM-01: the multimodal follow-up contract charges thumbnail cards to the
+    same ``overhead`` term the engine already reserves for the system prompt and
+    tool definitions, so one formula governs the whole input budget:
+    ``input_budget = align(n_ctx - max_new_tokens - overhead - card_tokens)``.
+    """
+
+    if isinstance(card_tokens, bool) or not isinstance(card_tokens, int) or card_tokens < 0:
+        raise ContextBudgetError("card_tokens must be a non-negative integer")
+    if card_tokens == 0:
+        return budget
+    reserved = ContextBudget(
+        n_ctx=budget.n_ctx,
+        max_new_tokens=budget.max_new_tokens,
+        overhead=budget.overhead + card_tokens,
+        alignment=budget.alignment,
+    )
+    # Touching the property fails closed when the cards leave no room for input.
+    _ = reserved.raw_input_budget
+    return reserved
