@@ -126,11 +126,15 @@ def test_nav_switches_panels_and_back_to_chat():
             # 「图像运行时」也含这三个字 —— 页序一变就假通过了。
             assert str(app.query_one("#panel-text").content).startswith("知识库")
 
-            app.action_nav(3)  # 资产（页序：对话 / 知识库 / MCP / 资产 / 运行时）
+            app.action_nav(3)  # 资产（页序：对话 / 知识库 / MCP / 资产 / 模型库 / 运行时）
             await pilot.pause()
             assert str(app.query_one("#panel-text").content).startswith("资产")
 
-            app.action_nav(4)  # 运行时
+            app.action_nav(4)  # 模型库
+            await pilot.pause()
+            assert str(app.query_one("#panel-text").content).startswith("模型库")
+
+            app.action_nav(5)  # 运行时
             await pilot.pause()
             assert str(app.query_one("#panel-text").content).startswith("运行时")
 
@@ -416,6 +420,88 @@ def test_assets_panel_can_generate_an_image(tmp_path):
             app.action_nav(0)
             await pilot.pause()
             assert app.query_one("#image-prompt").display is False, "对话页不应显示提示词框"
+
+    asyncio.run(scenario())
+
+
+def test_format_profile_list_notes_the_overflow():
+    from harness_workbench import tui
+
+    assert tui.format_profile_list([]) == "（没有画像）"
+    many = [{"model_id": f"m{i}"} for i in range(4)]
+    text = tui.format_profile_list(many, limit=2)
+    assert "m0" in text and "m1" in text and "m2" not in text
+    assert "另有 2 个" in text
+
+
+def test_format_model_library_renders_profiles_and_blocked_presets():
+    """按实测字段渲染：画像一览、预设详情、阻塞原因、下载队列与失败原因。"""
+
+    from harness_workbench import tui
+
+    profiles = [{"model_id": "qwen-1_8b", "backend": "pytorch", "format": "safetensors"}]
+    presets = [
+        {
+            "id": "p1",
+            "display": "P one",
+            "kind": "safetensors",
+            "default_engine": "pytorch",
+            "default_quant": "int4",
+            "installable": True,
+            "description": "小模型",
+        },
+        {"id": "p2", "display": "P two", "installable": False, "blocked_reasons": ["缺 GPU"]},
+    ]
+    jobs = [
+        {"job_id": "j1", "status": "done", "progress": 1.0, "preset_id": "p1"},
+        {"job_id": "j2", "status": "failed", "preset_id": "p2", "error": "网络超时"},
+    ]
+
+    text = tui.format_model_library(profiles, presets, jobs, selected="p1")
+    assert "qwen-1_8b  [pytorch/safetensors]" in text
+    assert "选中预设 : p1" in text and "P one" in text and "可安装   : True" in text
+    assert "done" in text
+    assert "网络超时" in text, "失败任务的错误信息要显示出来"
+
+    blocked = tui.format_model_library(profiles, presets, jobs, selected="p2")
+    assert "阻塞原因 : 缺 GPU" in blocked
+
+
+def test_model_library_page_and_refresh_report_truthfully():
+    """模型库页：列表仅该页可见；t 刷新必须如实报告连不上。
+
+    回归守卫：早先的 `t` 无条件显示「已刷新」，离线时也在骗人。
+    """
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        app._profiles = [{"model_id": "qwen-1_8b", "backend": "pytorch", "format": "safetensors"}]
+        app._presets = [{"id": "p1", "display": "P one", "installable": True}]
+        app._jobs = [{"job_id": "j1", "status": "done", "progress": 1.0, "preset_id": "p1"}]
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._render_presets()
+            app.action_nav(4)
+            await pilot.pause()
+            assert app.query_one("#preset-list").display is True, "模型库页应有预设列表"
+            assert str(app.query_one("#panel-text").content).startswith("模型库")
+
+            app._select_preset("p1")
+            await pilot.pause()
+            assert "选中预设 : p1" in str(app.query_one("#panel-text").content)
+
+            app.action_refresh()
+            await pilot.pause()
+            status = str(app.query_one("#status").content)
+            assert status.startswith("OFFLINE"), f"离线时不得谎报成功，实际: {status}"
+
+            app.action_nav(0)
+            await pilot.pause()
+            assert app.query_one("#preset-list").display is False
 
     asyncio.run(scenario())
 

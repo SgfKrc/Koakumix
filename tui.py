@@ -10,12 +10,14 @@
 一个内嵌 harness API（复用 :mod:`harness_workbench.desktop` 的装配：QLH 主项目优先，
 否则自起 llama-server）。避免一进来就退化成 FIXTURE 离线态。
 
-左栏导航（对话 / 知识库 / MCP / 资产 / 运行时）切换主区内容：
+左栏导航切换主区内容：
 - 对话页：新消息自动滚动到底（否则长会话只看到顶部那截，像"没有回应"）；
 - 知识库页：**可检索**（``POST /v1/rag/search``）**可入库**（``POST /v1/rag/sources``）；
 - MCP 页：列出内置工具（``GET /v1/mcp/tools``），选中后按 JSON 参数调用（``/v1/mcp/call``）；
 - 资产页：给提示词**生成图片**（``POST /v1/images/generations``）。终端无法内嵌显示图片，
-  因此生成结果**落盘**并在面板上报告路径与元数据。
+  因此生成结果**落盘**并在面板上报告路径与元数据；
+- 模型库页：画像 / 预设 / 下载队列（``/v1/model-profiles``、``/v1/model-presets``、
+  ``/v1/model-downloads``），选中预设按 d 入队下载。
 
 启动动画与 ``--no-splash`` / ``--splash-time`` 语义不变；非 TTY 自动跳过。
 """
@@ -43,6 +45,7 @@ NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("library", "知识库"),
     ("mcp", "MCP"),
     ("assets", "资产"),
+    ("presets", "模型库"),
     ("runtime", "运行时"),
 )
 
@@ -452,6 +455,85 @@ def format_image_result(path: Path, item: dict[str, Any], *, prompt: str = "") -
     return "\n".join(lines)
 
 
+def format_profile_list(profiles: list[dict[str, Any]], *, limit: int = 10) -> str:
+    """One line per model profile (pure, testable)."""
+
+    if not profiles:
+        return "（没有画像）"
+    lines = []
+    for profile in profiles[:limit]:
+        model_id = str(profile.get("model_id") or "?")
+        backend = str(profile.get("backend") or "-")
+        fmt = str(profile.get("format") or "-")
+        lines.append(f"{model_id}  [{backend}/{fmt}]")
+    if len(profiles) > limit:
+        lines.append(f"… 另有 {len(profiles) - limit} 个")
+    return "\n".join(lines)
+
+
+def format_model_library(
+    profiles: list[dict[str, Any]],
+    presets: list[dict[str, Any]],
+    jobs: list[dict[str, Any]],
+    *,
+    selected: str = "",
+    job_limit: int = 5,
+) -> str:
+    """Render the model library panel (pure, testable).
+
+    字段名取自实测响应（profiles: model_id/backend/format；presets: id/display/kind/
+    installable/blocked_reasons；jobs: status/progress/downloaded_bytes/error）。
+    """
+
+    lines = ["模型库", ""]
+    lines.append(f"画像     : {len(profiles)} 个")
+    lines.append(f"预设     : {len(presets)} 个")
+    lines.append(f"下载队列 : {len(jobs)} 项")
+
+    if profiles:
+        lines.append("")
+        lines.append("画像一览：")
+        lines.append(format_profile_list(profiles))
+
+    if selected:
+        preset = next((p for p in presets if str(p.get("id")) == selected), None)
+        lines.append("")
+        lines.append(f"选中预设 : {selected}")
+        if isinstance(preset, dict):
+            display = preset.get("display")
+            if display:
+                lines.append(f"  名称     : {display}")
+            lines.append(f"  类型     : {preset.get('kind', '-')}")
+            lines.append(f"  默认引擎 : {preset.get('default_engine', '-')} / {preset.get('default_quant', '-')}")
+            lines.append(f"  可安装   : {bool(preset.get('installable'))}")
+            blocked = preset.get("blocked_reasons")
+            if isinstance(blocked, list) and blocked:
+                lines.append(f"  阻塞原因 : {'; '.join(str(item) for item in blocked)}")
+            description = preset.get("description")
+            if description:
+                lines.append(f"  说明     : {str(description)[:120]}")
+
+    if jobs:
+        shown = jobs[-job_limit:]
+        lines.append("")
+        lines.append(f"最近下载（{len(shown)}/{len(jobs)}）：")
+        for job in shown:
+            progress = job.get("progress")
+            if isinstance(progress, (int, float)):
+                pct = f"{float(progress) * 100:>3.0f}%"
+            else:
+                done, total = job.get("downloaded_bytes"), job.get("total_bytes")
+                pct = f"{done}/{total}" if isinstance(done, int) and isinstance(total, int) else "-"
+            name = job.get("preset_id") or job.get("model_id") or job.get("job_id") or "?"
+            lines.append(f"  {str(job.get('status', '-')):<10} {pct:>7}  {name}")
+            if job.get("error"):
+                lines.append(f"        错误: {str(job['error'])[:100]}")
+
+    lines.append("")
+    lines.append("在下方列表里选中一个预设 → 按 d 入队下载（POST /v1/model-downloads）。按 t 刷新。")
+    return "\n".join(lines)
+
+
 def read_source_file(target: str) -> tuple[str, str]:
     """Read a text file for ingestion; return ``(title, text)``.
 
@@ -517,6 +599,7 @@ def create_app(
         #panel-scroll { height: 1fr; }
         #panel-text { height: auto; padding: 1 0; }
         #mcp-tool-list { display: none; height: auto; max-height: 8; }
+        #preset-list { display: none; height: auto; max-height: 8; }
         #rag-query { display: none; border: solid #30363d; background: #0d1117; }
         #rag-add { display: none; border: solid #30363d; background: #0d1117; }
         #mcp-args { display: none; border: solid #30363d; background: #0d1117; }
@@ -539,9 +622,11 @@ def create_app(
             ("2", "nav(1)", "知识库"),
             ("3", "nav(2)", "MCP"),
             ("4", "nav(3)", "资产"),
-            ("5", "nav(4)", "运行时"),
+            ("5", "nav(4)", "模型库"),
+            ("6", "nav(5)", "运行时"),
             ("m", "reload_models", "刷新模型"),
-            ("t", "reload_mcp", "刷新工具"),
+            ("t", "refresh", "刷新本页"),
+            ("d", "queue_download", "入队下载"),
             ("n", "new_session", "新建会话"),
             ("q", "quit", "退出"),
         ]
@@ -569,6 +654,10 @@ def create_app(
             self._image_size = str(image_size)
             self._image_steps = int(image_steps)
             self._last_image: str = ""
+            self._profiles: list[dict[str, Any]] = []
+            self._presets: list[dict[str, Any]] = []
+            self._jobs: list[dict[str, Any]] = []
+            self._preset: str = ""
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -598,6 +687,7 @@ def create_app(
                         with VerticalScroll(id="panel-scroll"):
                             yield Static("", id="panel-text")
                         yield ListView(id="mcp-tool-list")
+                        yield ListView(id="preset-list")
                         yield Input(placeholder="检索知识库…（回车执行）", id="rag-query")
                         yield Input(placeholder="入库：本地文档路径…（回车读取并索引）", id="rag-add")
                         yield Input(placeholder="MCP 参数（JSON）…（回车调用）", id="mcp-args")
@@ -637,6 +727,8 @@ def create_app(
                 else:
                     note = "serve_disabled"
             data = _probe(self._host)
+            library = _fetch_model_library(self._host)
+            data.update(library)
             self._deliver(note, data)
 
         def _deliver(self, note: str, data: dict[str, Any]) -> None:
@@ -668,6 +760,10 @@ def create_app(
                 self._render_models()
                 self._mcp_tools = list(data.get("mcp_tools") or [])
                 self._render_mcp_tools()
+                self._profiles = list(data.get("profiles") or [])
+                self._presets = list(data.get("presets") or [])
+                self._jobs = list(data.get("jobs") or [])
+                self._render_presets()
                 if self._sessions:
                     self._select_session(str(self._sessions[0].get("session_id", "")))
             self._render_nav()
@@ -734,6 +830,7 @@ def create_app(
             on_library = self._nav == 1
             on_mcp = self._nav == 2
             on_assets = self._nav == 3
+            on_presets = self._nav == 4
             self.query_one("#transcript-scroll").display = chatting
             self.query_one("#composer").display = chatting
             self.query_one("#panel").display = not chatting
@@ -743,10 +840,17 @@ def create_app(
             self.query_one("#mcp-tool-list").display = on_mcp
             self.query_one("#mcp-args").display = on_mcp
             self.query_one("#image-prompt").display = on_assets
+            self.query_one("#preset-list").display = on_presets
             self._mark_nav()
             if chatting:
                 return
-            builders = (self._library_panel, self._mcp_panel, self._assets_panel, self._runtime_panel)
+            builders = (
+                self._library_panel,
+                self._mcp_panel,
+                self._assets_panel,
+                self._presets_panel,
+                self._runtime_panel,
+            )
             self._set_panel(builders[self._nav - 1]())
 
         def _mark_nav(self) -> None:
@@ -805,6 +909,14 @@ def create_app(
             rows.append("图片会保存到上面的输出目录。")
             return "资产\n\n" + "\n".join(rows)
 
+        def _presets_panel(self) -> str:
+            return format_model_library(
+                self._profiles,
+                self._presets,
+                self._jobs,
+                selected=self._preset,
+            )
+
         def _runtime_panel(self) -> str:
             return (
                 "运行时\n\n"
@@ -814,6 +926,8 @@ def create_app(
                 f"会话数   : {len(self._sessions)}\n"
                 f"模型数   : {len(self._models)}\n"
                 f"MCP 工具 : {len(self._mcp_tools)}\n"
+                f"画像数   : {len(self._profiles)}\n"
+                f"预设数   : {len(self._presets)}\n"
                 f"图像输出 : {image_output_dir(self._image_dir)}"
             )
 
@@ -937,6 +1051,58 @@ def create_app(
             self._set_panel(format_image_result(path, item, prompt=prompt))
             status.update(f"ONLINE · 已生成 {path.name}")
 
+        # ---- model library ----
+        def _render_presets(self) -> None:
+            view = self.query_one("#preset-list", ListView)
+            view.clear()
+            for preset in self._presets:
+                preset_id = str(preset.get("id") or "")
+                if not preset_id:
+                    continue
+                mark = "▸ " if preset_id == self._preset else "  "
+                label = str(preset.get("display") or preset_id)
+                if not preset.get("installable", True):
+                    label += "  (不可安装)"
+                view.append(ListItem(Label(f"{mark}{label}"), name=preset_id))
+
+        def _select_preset(self, preset_id: str) -> None:
+            if not preset_id:
+                return
+            self._preset = preset_id
+            self._render_presets()
+            if self._nav == 4:
+                self._set_panel(self._presets_panel())
+
+        def _refresh_model_library(self) -> bool:
+            """Reload the library; return whether any endpoint actually answered."""
+
+            library = _fetch_model_library(self._host)
+            self._profiles = list(library.get("profiles") or [])
+            self._presets = list(library.get("presets") or [])
+            self._jobs = list(library.get("jobs") or [])
+            self._render_presets()
+            if self._nav == 4:
+                self._set_panel(self._presets_panel())
+            return bool(library.get("ok"))
+
+        def action_queue_download(self) -> None:
+            """Queue the selected preset.  An explicit key, because this has side effects."""
+
+            status = self.query_one("#status", Static)
+            preset_id = self._preset
+            if not preset_id:
+                status.update("OFFLINE · 未选中预设（先在下方列表里选一个）")
+                return
+            status.update(f"QUEUING · {preset_id}")
+            try:
+                _request_json(self._host, "/v1/model-downloads", {"preset_id": preset_id}, timeout=60.0)
+            except RuntimeError as exc:
+                status.update(f"OFFLINE · 入队失败: {exc}")
+                self._set_panel(f"模型库 · 入队失败\n\n{preset_id}\n\n{exc}")
+                return
+            self._refresh_model_library()
+            status.update(f"ONLINE · 已入队 {preset_id}")
+
         # ---- MCP ----
         def _render_mcp_tools(self) -> None:
             view = self.query_one("#mcp-tool-list", ListView)
@@ -948,7 +1114,7 @@ def create_app(
                 mark = "▸ " if name == self._mcp_tool else "  "
                 view.append(ListItem(Label(f"{mark}{name}"), name=name))
 
-        def action_reload_mcp(self) -> None:
+        def _reload_mcp_tools(self) -> None:
             try:
                 payload = _request_json(self._host, "/v1/mcp/tools")
             except RuntimeError:
@@ -959,6 +1125,18 @@ def create_app(
             if self._nav == 2:
                 self._render_nav()
             self.query_one("#status", Static).update(f"ONLINE · MCP 工具 {len(self._mcp_tools)} 个")
+
+        def action_refresh(self) -> None:
+            """Refresh whatever the current page pulled from the API."""
+
+            status = self.query_one("#status", Static)
+            if self._nav == 2:
+                self._reload_mcp_tools()
+            elif self._nav == 4:
+                ok = self._refresh_model_library()
+                status.update("ONLINE · 模型库已刷新" if ok else "OFFLINE · 模型库不可用（后端未连接）")
+            else:
+                status.update("（本页没有需要刷新的数据）")
 
         def _select_mcp_tool(self, name: str) -> None:
             if not name:
@@ -1014,7 +1192,7 @@ def create_app(
             failed = bool(response.get("error")) or bool((response.get("result") or {}).get("isError"))
             status.update(f"{'OFFLINE' if failed else 'ONLINE'} · MCP {name} {'失败' if failed else '完成'}")
 
-        # ---- models ----
+        # ---- models（左栏快捷切换）----
         def _render_models(self) -> None:
             view = self.query_one("#model-list", ListView)
             view.clear()
@@ -1089,6 +1267,8 @@ def create_app(
                 self._switch_model(name)
             elif which == "mcp-tool-list":
                 self._select_mcp_tool(name)
+            elif which == "preset-list":
+                self._select_preset(name)
 
         def action_new_session(self) -> None:
             self._create_session()
@@ -1173,6 +1353,37 @@ def create_app(
     return HarnessApp()
 
 
+def _fetch_model_library(host: str, *, timeout: float = 3.0) -> dict[str, Any]:
+    """Pull profiles / presets / download jobs.  Pure I/O: never touches widgets.
+
+    超时默认 3s（不是 20s）：这是**本地** harness API，而本函数在启动路径上被调用，
+    离线时三个端点各等满会把开窗拖到一分钟。空列表与"连不上"用 ``ok`` 区分。
+    """
+
+    library: dict[str, Any] = {}
+    ok = False
+    try:
+        profiles = _request_json(host, "/v1/model-profiles", timeout=timeout)
+        library["profiles"] = [item for item in profiles.get("profiles", []) if isinstance(item, dict)]
+        ok = True
+    except RuntimeError:
+        library["profiles"] = []
+    try:
+        presets = _request_json(host, "/v1/model-presets", timeout=timeout)
+        library["presets"] = [item for item in presets.get("presets", []) if isinstance(item, dict)]
+        ok = True
+    except RuntimeError:
+        library["presets"] = []
+    try:
+        downloads = _request_json(host, "/v1/model-downloads", timeout=timeout)
+        library["jobs"] = [item for item in downloads.get("jobs", []) if isinstance(item, dict)]
+        ok = True
+    except RuntimeError:
+        library["jobs"] = []
+    library["ok"] = ok
+    return library
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     app = create_app(
@@ -1209,6 +1420,8 @@ __all__ = [
     "format_add_result",
     "format_image_result",
     "format_mcp_result",
+    "format_model_library",
+    "format_profile_list",
     "format_rag_result",
     "image_output_dir",
     "main",
