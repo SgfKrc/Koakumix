@@ -12,10 +12,11 @@
 
 左栏导航切换主区内容：
 - 对话页：新消息自动滚动到底（否则长会话只看到顶部那截，像"没有回应"）；
-- 知识库页：**可检索**（``POST /v1/rag/search``）**可入库**（``POST /v1/rag/sources``）；
-- MCP 页：列出内置工具（``GET /v1/mcp/tools``），选中后按 JSON 参数调用（``/v1/mcp/call``）；
-- 资产页：给提示词**生成图片**（``POST /v1/images/generations``）。终端无法内嵌显示图片，
-  因此生成结果**落盘**并在面板上报告路径与元数据；
+- 知识库页：可检索（``POST /v1/rag/search``）可入库（``POST /v1/rag/sources``）；
+- MCP 页：工具列表（``/v1/mcp/tools``）+ 服务端清单（``/v1/mcp/manifest``）；参数框既支持
+  工具调用（``/v1/mcp/call``），也接受**原样 JSON-RPC 信封**（``/v1/mcp/rpc``）；
+- 资产页：生成图片（``POST /v1/images/generations``）；输入 ``@<asset_id>`` 时改用
+  ``GET /v1/images/assets/{id}`` 取回已有资产。终端无法内嵌显示图片，一律**落盘**并报路径；
 - 模型库页：画像 / 预设 / 下载队列（``/v1/model-profiles``、``/v1/model-presets``、
   ``/v1/model-downloads``），选中预设按 d 入队下载。
 
@@ -104,6 +105,19 @@ def _request_json(
     return value
 
 
+def _request_bytes(host: str, path: str, *, timeout: float = 60.0) -> tuple[bytes, str]:
+    """Fetch binary content (image assets); return ``(blob, content_type)``."""
+
+    request = urllib.request.Request(host.rstrip("/") + path, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read(), str(response.headers.get("content-type") or "")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"HTTP {exc.code}") from exc
+    except (OSError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"harness API unavailable: {exc}") from exc
+
+
 def _stream_chat(host: str, payload: dict[str, Any]) -> str:
     request = urllib.request.Request(
         host.rstrip("/") + "/v1/chat/completions",
@@ -170,51 +184,62 @@ def start_local_backend(*, model_path: str | None, llama_exe: str | None, qlh_ba
     return shell, server_url.rstrip("/").removesuffix("/app")
 
 
-def _probe(host: str) -> dict[str, Any]:
-    """Collect the panels' data.  Pure I/O: never touches widgets."""
+def _probe(host: str, *, timeout: float = 8.0) -> dict[str, Any]:
+    """Collect the panels' data.  Pure I/O: never touches widgets.
+
+    ``timeout`` 由调用方压缩：这里共有 9 个端点，启动路径上离线时各等满会把开窗拖到一分钟。
+    """
 
     data: dict[str, Any] = {}
     try:
-        health = _request_json(host, "/healthz")
+        health = _request_json(host, "/healthz", timeout=timeout)
         data["backend"] = str(health.get("backend", "harness api"))
     except RuntimeError as exc:
         data["error"] = str(exc)
         return data
     try:
-        rag = _request_json(host, "/v1/rag/health")
+        data["capabilities"] = _request_json(host, "/v1/capabilities", timeout=timeout)
+    except RuntimeError:
+        data["capabilities"] = {}
+    try:
+        rag = _request_json(host, "/v1/rag/health", timeout=timeout)
         data["rag"] = f"RAG {rag.get('backend', 'unknown')} / {rag.get('chunks', 0)} chunks"
         data["rag_raw"] = rag
     except RuntimeError:
         data["rag"] = "RAG unavailable"
     try:
-        image = _request_json(host, "/v1/images/capabilities")
+        image = _request_json(host, "/v1/images/capabilities", timeout=timeout)
         ready = bool(image.get("runtime_available")) and bool(image.get("supports_txt2img"))
         data["image"] = "TXT2IMG ready" if ready else "TXT2IMG blocked"
         data["image_raw"] = image
     except RuntimeError:
         data["image"] = "TXT2IMG unavailable"
     try:
-        sessions = _request_json(host, "/v1/sessions?owner_scope=local&limit=50")
+        sessions = _request_json(host, "/v1/sessions?owner_scope=local&limit=50", timeout=timeout)
         data["sessions"] = [item for item in sessions.get("sessions", []) if isinstance(item, dict)]
     except RuntimeError:
         data["sessions"] = []
     try:
-        assets = _request_json(host, "/v1/model-assets")
+        assets = _request_json(host, "/v1/model-assets", timeout=timeout)
         data["models"] = [item for item in assets.get("models", []) if isinstance(item, dict)]
     except RuntimeError:
         data["models"] = []
     try:
-        current = _request_json(host, "/v1/models")
+        current = _request_json(host, "/v1/models", timeout=timeout)
         rows = current.get("data") or []
         if rows and isinstance(rows[0], dict):
             data["loaded_model"] = str(rows[0].get("id", ""))
     except RuntimeError:
         pass
     try:
-        tools = _request_json(host, "/v1/mcp/tools")
+        tools = _request_json(host, "/v1/mcp/tools", timeout=timeout)
         data["mcp_tools"] = [item for item in tools.get("tools", []) if isinstance(item, dict)]
     except RuntimeError:
         data["mcp_tools"] = []
+    try:
+        data["mcp_manifest"] = _request_json(host, "/v1/mcp/manifest", timeout=timeout)
+    except RuntimeError:
+        data["mcp_manifest"] = {}
     return data
 
 
@@ -282,6 +307,34 @@ def format_add_result(source_ref: str, title: str, text: str, result: dict[str, 
     return "\n".join(lines)
 
 
+def format_capabilities(caps: dict[str, Any] | None) -> list[str]:
+    """Render ``/v1/capabilities`` as panel lines (pure, testable).
+
+    字段名不硬编码：已知项优先展示，另外把实际键列出来，契约变化时界面可见。
+    """
+
+    if not caps:
+        return ["能力面   : unavailable"]
+    lines = [f"能力面   : {caps.get('backend', '-')}"]
+    # 键名取自实测响应（backend / model_ids / supports_* / evidence），不再用猜的名字。
+    for key in (
+        "model_ids",
+        "supports_stream",
+        "supports_images",
+        "supports_multimodal",
+        "supports_num_ctx",
+        "supports_cache_prompt",
+        "evidence",
+    ):
+        value = caps.get(key)
+        if value is None:
+            continue
+        shown = f"{len(value)} 项" if isinstance(value, (list, tuple)) else value
+        lines.append(f"  {key:<12}: {shown}")
+    lines.append(f"  返回字段   : {', '.join(sorted(str(k) for k in caps))}")
+    return lines
+
+
 def tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
     """Return a tool's input schema, tolerating either naming convention."""
 
@@ -323,6 +376,19 @@ def mcp_arguments_template(schema: dict[str, Any] | None) -> str:
     return json.dumps(skeleton, ensure_ascii=False, indent=2)
 
 
+def is_jsonrpc_payload(raw: str) -> bool:
+    """Whether the MCP box carries a full JSON-RPC envelope (i.e. has a ``method``)."""
+
+    text = raw.strip()
+    if not text.startswith("{"):
+        return False
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(value, dict) and isinstance(value.get("method"), str)
+
+
 def format_mcp_result(name: str, response: dict[str, Any]) -> str:
     """Render a JSON-RPC ``tools/call`` response (pure, testable)."""
 
@@ -356,6 +422,27 @@ def format_mcp_result(name: str, response: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_mcp_manifest(manifest: dict[str, Any] | None, *, tool_count: int) -> list[str]:
+    """Render ``/v1/mcp/manifest`` as panel lines (pure, testable)."""
+
+    data = manifest if isinstance(manifest, dict) else {}
+    server = data.get("server") if isinstance(data.get("server"), dict) else {}
+    external = data.get("external_mcp") if isinstance(data.get("external_mcp"), dict) else {}
+    transports = data.get("transports") if isinstance(data.get("transports"), dict) else {}
+    info = server.get("serverInfo") if isinstance(server.get("serverInfo"), dict) else {}
+    configs = external.get("configurations")
+    lines = [
+        f"服务端   : {info.get('name', '-')} {info.get('version', '')}".rstrip(),
+        f"协议     : {server.get('protocolVersion', '-')}",
+        f"工具数   : {tool_count}",
+        f"外部 MCP : {len(configs) if isinstance(configs, list) else 0} 个配置"
+        f"{'（仅配置，未真连）' if external.get('configuration_only') else ''}",
+    ]
+    if transports:
+        lines.append(f"传输     : {', '.join(sorted(str(k) for k in transports))}")
+    return lines
+
+
 def parse_mcp_arguments(raw: str) -> dict[str, Any]:
     """Parse the arguments box; raise ``ValueError`` with a readable reason."""
 
@@ -387,6 +474,18 @@ def parse_image_size(raw: str) -> tuple[int, int]:
     return width, height
 
 
+def parse_image_input(raw: str) -> tuple[str, str]:
+    """Interpret the asset box: ``@<asset_id>`` fetches an existing asset, else it is a prompt.
+
+    Pure and testable; keeps the UI free of the "is this a prompt or an id" branch.
+    """
+
+    text = raw.strip()
+    if text.startswith("@"):
+        return "asset", text[1:].strip()
+    return "prompt", text
+
+
 def image_output_dir(explicit: str | None = None) -> Path:
     """Where generated images land: explicit dir, else the shared Koakumix data dir."""
 
@@ -399,6 +498,31 @@ def image_output_dir(explicit: str | None = None) -> Path:
     except Exception:  # pragma: no cover - desktop module always importable here
         base = Path.home() / ".koakumix"
     return Path(base) / "images"
+
+
+def write_image_blob(
+    blob: bytes,
+    *,
+    mime: str = "image/png",
+    out_dir: Path | str,
+    stamp: str | None = None,
+    seed: Any = None,
+) -> Path:
+    """Write raw image bytes under ``out_dir`` with a predictable name; return the path.
+
+    Shared by "generated" and "fetched by asset id" paths so naming stays consistent.
+    """
+
+    if not blob:
+        raise ValueError("空数据，无法写盘")
+    suffix = MIME_SUFFIXES.get(mime, ".png")
+    tag = f"-seed{seed}" if isinstance(seed, int) else ""
+    name = f"koakumix-{stamp or _time.strftime('%Y%m%d-%H%M%S')}{tag}{suffix}"
+    target_dir = Path(out_dir).expanduser()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / name
+    path.write_bytes(blob)
+    return path
 
 
 def save_generated_image(item: dict[str, Any], out_dir: Path, *, stamp: str | None = None) -> Path:
@@ -415,28 +539,22 @@ def save_generated_image(item: dict[str, Any], out_dir: Path, *, stamp: str | No
         blob = base64.b64decode(raw, validate=True)
     except Exception as exc:  # noqa: BLE001 - binascii.Error and friends
         raise ValueError(f"b64_json 解码失败: {exc}") from exc
-    if not blob:
-        raise ValueError("解码后得到空数据")
 
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-    mime = str(metadata.get("mime_type") or "image/png")
-    suffix = MIME_SUFFIXES.get(mime, ".png")
-    seed = metadata.get("seed")
-    tag = f"-seed{seed}" if isinstance(seed, int) else ""
-    name = f"koakumix-{stamp or _time.strftime('%Y%m%d-%H%M%S')}{tag}{suffix}"
-
-    target_dir = Path(out_dir).expanduser()
-    target_dir.mkdir(parents=True, exist_ok=True)
-    path = target_dir / name
-    path.write_bytes(blob)
-    return path
+    return write_image_blob(
+        blob,
+        mime=str(metadata.get("mime_type") or "image/png"),
+        out_dir=out_dir,
+        stamp=stamp,
+        seed=metadata.get("seed"),
+    )
 
 
-def format_image_result(path: Path, item: dict[str, Any], *, prompt: str = "") -> str:
-    """Render the generation outcome (pure, testable)."""
+def format_image_result(path: Path, item: dict[str, Any], *, prompt: str = "", source: str = "生成") -> str:
+    """Render an image outcome (pure, testable)."""
 
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-    lines = ["资产 · 图像生成", ""]
+    lines = [f"资产 · 图像{source}", ""]
     if prompt:
         lines.append(f"提示词 : {prompt[:160]}{'…' if len(prompt) > 160 else ''}")
     lines.append(f"已保存 : {path}")
@@ -654,6 +772,7 @@ def create_app(
             self._image_size = str(image_size)
             self._image_steps = int(image_steps)
             self._last_image: str = ""
+            self._last_asset_id: str = ""
             self._profiles: list[dict[str, Any]] = []
             self._presets: list[dict[str, Any]] = []
             self._jobs: list[dict[str, Any]] = []
@@ -690,8 +809,8 @@ def create_app(
                         yield ListView(id="preset-list")
                         yield Input(placeholder="检索知识库…（回车执行）", id="rag-query")
                         yield Input(placeholder="入库：本地文档路径…（回车读取并索引）", id="rag-add")
-                        yield Input(placeholder="MCP 参数（JSON）…（回车调用）", id="mcp-args")
-                        yield Input(placeholder="图像提示词…（回车生成并保存到本地）", id="image-prompt")
+                        yield Input(placeholder="MCP 参数 / 原样 JSON-RPC…（回车发送）", id="mcp-args")
+                        yield Input(placeholder="图像提示词，或 @资产ID 取回已有图…（回车）", id="image-prompt")
                     yield Input(placeholder="输入消息，回车发送…", id="composer")
             yield Footer()
 
@@ -726,7 +845,8 @@ def create_app(
                         note = f"start_failed: {exc}"
                 else:
                     note = "serve_disabled"
-            data = _probe(self._host)
+            # 启动路径统一用短超时：本地端点 2s 足够；离线时也不会让开窗白等一分钟。
+            data = _probe(self._host, timeout=2.0)
             library = _fetch_model_library(self._host)
             data.update(library)
             self._deliver(note, data)
@@ -876,18 +996,16 @@ def create_app(
             )
 
         def _mcp_panel(self) -> str:
-            if not self._mcp_tools:
-                return (
-                    "MCP 工具\n\n"
-                    "（没有取到工具列表。按 t 重新拉取；后端未连接时列表为空。）\n\n"
-                    "工具列表来自 GET /v1/mcp/tools，调用走 POST /v1/mcp/call。"
-                )
-            selected = self._mcp_tool or "(未选中)"
-            lines = [f"MCP 工具 · 共 {len(self._mcp_tools)} 个", ""]
-            lines.append(f"当前选中 : {selected}")
+            lines = ["MCP", ""]
+            lines.extend(format_mcp_manifest(self._boot.get("mcp_manifest"), tool_count=len(self._mcp_tools)))
             lines.append("")
-            lines.append("在下方列表里选中一个工具 → 参数框会自动填入必填字段的 JSON 骨架 →")
-            lines.append("填好值后回车调用。按 t 可重新拉取工具列表。")
+            if not self._mcp_tools:
+                lines.append("（没有取到工具列表。按 t 重新拉取。）")
+                return "\n".join(lines)
+            lines.append(f"当前选中 : {self._mcp_tool or '(未选中)'}")
+            lines.append("")
+            lines.append("在下方列表里选中工具 → 参数框自动填入必填字段骨架 → 回车调用。")
+            lines.append("若参数框里写的是完整 JSON-RPC 信封（含 method 字段），则改走 /v1/mcp/rpc。")
             return "\n".join(lines)
 
         def _assets_panel(self) -> str:
@@ -896,7 +1014,6 @@ def create_app(
             if self._current_model:
                 rows.append(f"当前模型   : {self._current_model}")
             rows.append(f"图像运行时 : {self._boot.get('image', 'unavailable')}")
-            rows.append(f"MCP 工具数 : {len(self._mcp_tools)}")
             rows.append(f"生成尺寸   : {self._image_size} · 步数 {self._image_steps}")
             rows.append(f"输出目录   : {image_output_dir(self._image_dir)}")
             if image:
@@ -904,9 +1021,12 @@ def create_app(
                 rows.append(f"  runtime  : {bool(image.get('runtime_available'))}")
             if self._last_image:
                 rows.append(f"最近生成   : {self._last_image}")
+            if self._last_asset_id:
+                rows.append(f"最近资产 ID: {self._last_asset_id}（可用 @ID 取回）")
             rows.append("")
-            rows.append("在下方提示词框输入描述并回车即可生成（POST /v1/images/generations），")
-            rows.append("图片会保存到上面的输出目录。")
+            rows.append("提示词框：直接输入描述 → 生成新图（POST /v1/images/generations）；")
+            rows.append("输入 @<asset_id> → 取回已有资产（GET /v1/images/assets/{id}）。")
+            rows.append("生成成功且当前有会话时，会自动挂到该会话（POST /v1/sessions/{id}/assets）。")
             return "资产\n\n" + "\n".join(rows)
 
         def _presets_panel(self) -> str:
@@ -918,18 +1038,22 @@ def create_app(
             )
 
         def _runtime_panel(self) -> str:
-            return (
-                "运行时\n\n"
-                f"后端地址 : {self._host}\n"
-                f"后端类型 : {self._boot.get('backend', 'unavailable')}\n"
-                f"内嵌后端 : {'是（本 TUI 拉起）' if self._shell is not None else '否（复用外部服务）'}\n"
-                f"会话数   : {len(self._sessions)}\n"
-                f"模型数   : {len(self._models)}\n"
-                f"MCP 工具 : {len(self._mcp_tools)}\n"
-                f"画像数   : {len(self._profiles)}\n"
-                f"预设数   : {len(self._presets)}\n"
-                f"图像输出 : {image_output_dir(self._image_dir)}"
-            )
+            rows = [
+                "运行时",
+                "",
+                f"后端地址 : {self._host}",
+                f"后端类型 : {self._boot.get('backend', 'unavailable')}",
+                f"内嵌后端 : {'是（本 TUI 拉起）' if self._shell is not None else '否（复用外部服务）'}",
+                f"会话数   : {len(self._sessions)}",
+                f"模型数   : {len(self._models)}",
+                f"MCP 工具 : {len(self._mcp_tools)}",
+                f"画像数   : {len(self._profiles)}",
+                f"预设数   : {len(self._presets)}",
+                f"图像输出 : {image_output_dir(self._image_dir)}",
+                "",
+            ]
+            rows.extend(format_capabilities(self._boot.get("capabilities")))
+            return "\n".join(rows)
 
         # ---- knowledge base ----
         def _run_rag_search(self, query: str) -> None:
@@ -1003,7 +1127,14 @@ def create_app(
             self._set_panel(format_add_result(str(Path(target).expanduser()), title, text, result))
             status.update(f"ONLINE · 已入库 {title}")
 
-        # ---- assets：图像生成 ----
+        # ---- assets：生成 / 取回 ----
+        def _handle_asset_input(self, raw: str) -> None:
+            kind, value = parse_image_input(raw)
+            if kind == "asset":
+                self._fetch_asset(value)
+                return
+            self._generate_image(value)
+
         def _generate_image(self, prompt: str) -> None:
             if not prompt:
                 self._set_panel(self._assets_panel())
@@ -1048,8 +1179,54 @@ def create_app(
                 status.update("OFFLINE · 图像保存失败")
                 return
             self._last_image = str(path)
-            self._set_panel(format_image_result(path, item, prompt=prompt))
+            if isinstance(item.get("asset_id"), str):
+                self._last_asset_id = item["asset_id"]
+            note = self._attach_asset(self._last_asset_id)
+            self._set_panel(format_image_result(path, item, prompt=prompt) + note)
             status.update(f"ONLINE · 已生成 {path.name}")
+
+        def _fetch_asset(self, asset_id: str) -> None:
+            if not asset_id:
+                self._set_panel("资产 · 取回资产\n\n用法：@<asset_id>（例如 @img_abc123）")
+                return
+            status = self.query_one("#status", Static)
+            status.update(f"FETCHING · {asset_id}")
+            self._set_panel(f"资产 · 取回资产\n\n资产 ID：{asset_id}\n\n下载中…")
+            try:
+                blob, content_type = _request_bytes(self._host, f"/v1/images/assets/{asset_id}")
+            except RuntimeError as exc:
+                self._set_panel(f"资产 · 取回资产\n\n取回失败：{exc}")
+                status.update("OFFLINE · 资产取回失败")
+                return
+            mime = content_type.split(";")[0].strip() or "image/png"
+            try:
+                path = write_image_blob(blob, mime=mime, out_dir=image_output_dir(self._image_dir))
+            except ValueError as exc:
+                self._set_panel(f"资产 · 取回资产\n\n保存失败：{exc}")
+                status.update("OFFLINE · 资产保存失败")
+                return
+            self._last_image = str(path)
+            self._last_asset_id = asset_id
+            self._set_panel(
+                format_image_result(path, {"asset_id": asset_id}, source="取回")
+            )
+            status.update(f"ONLINE · 已取回 {path.name}")
+
+        def _attach_asset(self, asset_id: str) -> str:
+            """Attach an asset to the current session; return a one-line note (may be empty)."""
+
+            if not asset_id or not self._session_id:
+                return ""
+            try:
+                _request_json(
+                    self._host,
+                    f"/v1/sessions/{self._session_id}/assets",
+                    {"owner_scope": "local", "asset_id": asset_id, "kind": "image"},
+                    timeout=30.0,
+                )
+            except RuntimeError as exc:
+                return f"\n\n（挂到会话失败：{exc}）"
+            return f"\n\n已挂到当前会话：{self._session_id}"
 
         # ---- model library ----
         def _render_presets(self) -> None:
@@ -1121,6 +1298,10 @@ def create_app(
                 self.query_one("#status", Static).update("OFFLINE · MCP 工具列表不可用")
                 return
             self._mcp_tools = [item for item in payload.get("tools", []) if isinstance(item, dict)]
+            try:
+                self._boot["mcp_manifest"] = _request_json(self._host, "/v1/mcp/manifest")
+            except RuntimeError:
+                pass
             self._render_mcp_tools()
             if self._nav == 2:
                 self._render_nav()
@@ -1164,9 +1345,13 @@ def create_app(
             )
 
         def _call_mcp(self, raw: str) -> None:
+            # 完整 JSON-RPC 信封（含 method）走通用通道，否则按工具调用处理。
+            if is_jsonrpc_payload(raw):
+                self._call_mcp_rpc(raw)
+                return
             name = self._mcp_tool
             if not name:
-                self._set_panel("MCP · 尚未选中工具\n\n请先在下方列表里选一个工具。")
+                self._set_panel("MCP · 尚未选中工具\n\n请先在下方列表里选一个工具，或直接输入 JSON-RPC 信封。")
                 return
             status = self.query_one("#status", Static)
             try:
@@ -1191,6 +1376,27 @@ def create_app(
             self._set_panel(format_mcp_result(name, response))
             failed = bool(response.get("error")) or bool((response.get("result") or {}).get("isError"))
             status.update(f"{'OFFLINE' if failed else 'ONLINE'} · MCP {name} {'失败' if failed else '完成'}")
+
+        def _call_mcp_rpc(self, raw: str) -> None:
+            status = self.query_one("#status", Static)
+            try:
+                envelope = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                self._set_panel(f"MCP · JSON-RPC\n\n信封不是合法 JSON：{exc}")
+                status.update("OFFLINE · MCP 信封错误")
+                return
+            method = str(envelope.get("method") or "")
+            status.update(f"RPC · {method}")
+            self._set_panel(f"MCP · JSON-RPC {method}\n\n发送中…")
+            try:
+                response = _request_json(self._host, "/v1/mcp/rpc", envelope, timeout=120.0)
+            except RuntimeError as exc:
+                self._set_panel(f"MCP · JSON-RPC {method}\n\n调用失败：{exc}")
+                status.update("OFFLINE · MCP RPC 失败")
+                return
+            self._set_panel(format_mcp_result(method or "rpc", response))
+            failed = bool(response.get("error"))
+            status.update(f"{'OFFLINE' if failed else 'ONLINE'} · MCP RPC {method} {'失败' if failed else '完成'}")
 
         # ---- models（左栏快捷切换）----
         def _render_models(self) -> None:
@@ -1294,7 +1500,7 @@ def create_app(
                 self.action_nav(0)
             self._set_transcript("KOAKUMIX\n\n等待一条消息。")
 
-        # ---- inputs：检索 / 入库 / MCP 参数 / 图像提示词 / 对话 分流 ----
+        # ---- inputs：检索 / 入库 / MCP / 资产 / 对话 分流 ----
         def on_input_submitted(self, event: Input.Submitted) -> None:
             widget_id = getattr(event.input, "id", None)
             text = event.value.strip()
@@ -1312,7 +1518,7 @@ def create_app(
                 return
             if widget_id == "image-prompt":
                 event.input.value = ""
-                self._generate_image(text)
+                self._handle_asset_input(text)
                 return
             if not text:
                 return
@@ -1418,18 +1624,23 @@ __all__ = [
     "build_parser",
     "create_app",
     "format_add_result",
+    "format_capabilities",
     "format_image_result",
+    "format_mcp_manifest",
     "format_mcp_result",
     "format_model_library",
     "format_profile_list",
     "format_rag_result",
     "image_output_dir",
+    "is_jsonrpc_payload",
     "main",
     "mcp_arguments_template",
+    "parse_image_input",
     "parse_image_size",
     "parse_mcp_arguments",
     "read_source_file",
     "save_generated_image",
     "start_local_backend",
     "tool_schema",
+    "write_image_blob",
 ]

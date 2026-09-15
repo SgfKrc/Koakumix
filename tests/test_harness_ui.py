@@ -506,6 +506,99 @@ def test_model_library_page_and_refresh_report_truthfully():
     asyncio.run(scenario())
 
 
+def test_jsonrpc_payload_detection():
+    """MCP 参数框靠这个判断走工具调用还是通用 JSON-RPC 通道。"""
+
+    from harness_workbench import tui
+
+    assert tui.is_jsonrpc_payload('{"jsonrpc":"2.0","method":"tools/list","id":"1"}') is True
+    assert tui.is_jsonrpc_payload('{"query": "缓存"}') is False, "工具参数不是信封"
+    assert tui.is_jsonrpc_payload("not json") is False
+    assert tui.is_jsonrpc_payload("") is False
+
+
+def test_parse_image_input_routes_asset_ids_and_prompts():
+    from harness_workbench import tui
+
+    assert tui.parse_image_input("@img_abc") == ("asset", "img_abc")
+    assert tui.parse_image_input("  @x  ") == ("asset", "x")
+    assert tui.parse_image_input("a red star") == ("prompt", "a red star")
+    assert tui.parse_image_input("  ") == ("prompt", "")
+
+
+def test_format_capabilities_uses_the_observed_keys():
+    from harness_workbench import tui
+
+    lines = tui.format_capabilities(
+        {"backend": "llama_server", "supports_stream": True, "model_ids": ["a", "b"]}
+    )
+    joined = "\n".join(lines)
+    assert "supports_stream" in joined and "2 项" in joined
+    assert "返回字段" in joined
+    assert tui.format_capabilities(None) == ["能力面   : unavailable"]
+
+
+def test_format_mcp_manifest_summarises_the_server():
+    from harness_workbench import tui
+
+    manifest = {
+        "server": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "koakumix", "version": "0.1"}},
+        "external_mcp": {"configurations": [], "configuration_only": True},
+        "transports": {"jsonrpc": {}, "call": {}, "stdio": {}},
+    }
+    joined = "\n".join(tui.format_mcp_manifest(manifest, tool_count=16))
+    assert "koakumix 0.1" in joined and "2024-11-05" in joined and "16" in joined
+    assert "仅配置，未真连" in joined
+
+
+def test_probe_fails_fast_with_a_compressed_timeout():
+    """启动路径必须能压缩超时，否则离线时 9 个端点各等满会把开窗拖到一分钟。"""
+
+    import time
+
+    from harness_workbench import tui
+
+    started = time.monotonic()
+    data = tui._probe("http://127.0.0.1:1", timeout=1.0)
+    elapsed = time.monotonic() - started
+    assert data.get("error"), "离线时应返回 error 而不是抛异常"
+    assert elapsed < 5.0, f"离线探测应快速失败，实际 {elapsed:.2f}s"
+
+
+def test_mcp_rpc_and_asset_prefix_routing():
+    """MCP 参数框写 JSON-RPC 信封走 /rpc；资产框写 @id 走取回。"""
+
+    import asyncio
+
+    from harness_workbench import tui
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_nav(2)
+            await pilot.pause()
+            box = app.query_one("#mcp-args")
+            box.focus()
+            await pilot.pause()
+            box.value = '{"jsonrpc":"2.0","id":"t","method":"tools/list","params":{}}'
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "JSON-RPC" in str(app.query_one("#panel-text").content)
+
+            app.action_nav(3)
+            await pilot.pause()
+            image_box = app.query_one("#image-prompt")
+            image_box.focus()
+            await pilot.pause()
+            image_box.value = "@img_abc"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "取回资产" in str(app.query_one("#panel-text").content)
+
+    asyncio.run(scenario())
+
+
 def test_react_ui_is_independent_and_uses_non_green_cyber_accent():
     package = (UI_ROOT / "package.json").read_text(encoding="utf-8")
     styles = (UI_ROOT / "src" / "styles.css").read_text(encoding="utf-8")
