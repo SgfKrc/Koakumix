@@ -86,7 +86,9 @@ def test_builtin_profiles_are_conservative_candidates() -> None:
     assert by_id["Qwen3-0.6B"].generation["thinking"] == "declared"
     assert by_id["MiniCPM4-0.5B"].resources["min_vram_gb"] == 1.5
     assert by_id["DistilQwen2.5-DS3-0324-7B"].resources["min_disk_gb"] == 20.0
-    assert by_id["Qwen2.5-0.5B"].artifact_sha256 is None
+    assert by_id["Qwen2.5-0.5B"].revision == "builtin-qwen25-0.5b-v2"
+    assert len(by_id["Qwen2.5-0.5B"].artifact_sha256 or "") == 64
+    assert by_id["Qwen2.5-0.5B"].evidence["artifact_digest_mode"] == "manifest"
 
 
 def test_profile_round_trip_and_digest_rejects_tampering() -> None:
