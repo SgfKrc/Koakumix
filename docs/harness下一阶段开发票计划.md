@@ -88,7 +88,7 @@ S6 工作台 UI（依赖 S7/S8 的 API 面）───────────�
 | `S7-TOOL-01` | S7 工具 | `qlh.tool_context.v1` 有界结果注入与 capability gate 联动 | NET-01/02 | **已完成本机开发门**；无 verified 能力时 fail-closed |
 | `S7-MCP-01` | S7 MCP | 内置 MCP registry、schema 校验、stdio transport、读/写工具最小集 | NET/TOOL 合同 | **已完成本机开发门**；fixture MCP 门 |
 | `S7-MCP-02` | S7 MCP | SSE transport 与外部 MCP 端点后置验收、第三方客户端兼容加固 | MCP-01 | **已完成本机开发门**；真实第三方服务/认证后置 |
-| `S5-CLOSE-01` | S5 收口 | Ollama 对照、契约漂移、Pareto 与公开演示 evidence 汇总 | S3.2/S7/S8 可用门 | **已完成（2026-09-15）**：`research/s5_close.py`（`qlh.harness.s5_close.v1`）四段收口报告；契约漂移 4 matched / 1 drifted / 0 failed，Pareto 4 点 1 被支配（fixture scope，不参与生产选择），evidence ledger 7 张票含边界声明；Ollama 对照段 `not_run`（本机 Ollama 服务存活但推理无响应，探测证据已存档），真机质量保持后置 |
+| `S5-CLOSE-01` | S5 收口 | Ollama 对照、契约漂移、Pareto 与公开演示 evidence 汇总 | S3.2/S7/S8 可用门 | **已完成（2026-09-15）**：`research/s5_close.py`（`qlh.harness.s5_close.v1`）四段收口报告；契约漂移 4 matched / 1 drifted / 0 failed；**Ollama 对照 completed**（`qwen3-vl:4b` vs `Qwen3-4B`：一致性 0.000、延迟比 10.66×）；Pareto 4 点 1 被支配（fixture scope，不参与生产选择）；evidence ledger 7 张票含边界声明 |
 
 **当前执行顺序**：`S7-NET-01 → S7-NET-02 → S7-TOOL-01 → S7-MCP-01 → S7-MCP-02 → S5-CLOSE-01` 已**全部走完（2026-09-15）**；本阶段无入口票。后续候选：`S3.2-IMG-01`/`S3.2-MM-01`/`S3.2-EDIT-01`（按硬件可用性插入）、以及本阶段的后置验收（真实第三方 MCP 服务、真实网络、Ollama 对照）。
 
