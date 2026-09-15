@@ -14,6 +14,19 @@ from .contracts import (
     ImageRequest,
     ImageRequestError,
 )
+from .editing import (
+    CONTRACT_ONLY,
+    EDIT_MODES,
+    EDIT_MODE_SPECS,
+    EDIT_REQUEST_SCHEMA,
+    UNAVAILABLE,
+    EditAvailability,
+    EditModeSpec,
+    ImageEditRequest,
+    edit_capability_matrix,
+    edit_mode_spec,
+    resolve_edit_availability,
+)
 from .local_engine import LocalImageEngine, LocalImageEngineConfig
 from .manifest import AssetManifestReport, validate_asset_manifest
 from .refs import (
@@ -32,13 +45,20 @@ from .refs import (
 )
 
 __all__ = [
+    "CONTRACT_ONLY",
+    "EDIT_MODES",
+    "EDIT_MODE_SPECS",
+    "EDIT_REQUEST_SCHEMA",
     "IMAGE_REF_SCHEMA",
     "MAX_CARD_CHARS",
     "MAX_PROMPT_CHARS",
     "MAX_REFS_PER_TURN",
     "MULTIMODAL_CONTEXT_SCHEMA",
     "SUPPORTED_MIME_TYPES",
+    "UNAVAILABLE",
     "AssetManifestReport",
+    "EditAvailability",
+    "EditModeSpec",
     "GeneratedImage",
     "ImageAdapter",
     "ImageAdapterCapabilities",
@@ -46,6 +66,7 @@ __all__ = [
     "ImageAssetRecord",
     "ImageAssetRef",
     "ImageAssetStore",
+    "ImageEditRequest",
     "ImageRefError",
     "ImageRequest",
     "ImageRequestError",
@@ -54,6 +75,9 @@ __all__ = [
     "MultimodalContext",
     "ThumbnailCard",
     "build_multimodal_context",
+    "edit_capability_matrix",
+    "edit_mode_spec",
     "render_thumbnail_card",
+    "resolve_edit_availability",
     "validate_asset_manifest",
 ]
