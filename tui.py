@@ -10,10 +10,11 @@
 一个内嵌 harness API（复用 :mod:`harness_workbench.desktop` 的装配：QLH 主项目优先，
 否则自起 llama-server）。避免一进来就退化成 FIXTURE 离线态。
 
-左栏导航（对话 / 知识库 / 资产 / 运行时）切换主区内容：
+左栏导航（对话 / 知识库 / MCP / 资产 / 运行时）切换主区内容：
 - 对话页：新消息自动滚动到底（否则长会话只看到顶部那截，像"没有回应"）；
-- 知识库页：**可检索**（``POST /v1/rag/search``）**可入库**（``POST /v1/rag/sources``，
-  从本地文件读文本）。
+- 知识库页：**可检索**（``POST /v1/rag/search``）**可入库**（``POST /v1/rag/sources``）；
+- MCP 页：列出内置工具（``GET /v1/mcp/tools``），选中后按 JSON 参数调用
+  （``POST /v1/mcp/call``）。
 
 启动动画与 ``--no-splash`` / ``--splash-time`` 语义不变；非 TTY 自动跳过。
 """
@@ -34,6 +35,7 @@ QLH_BASE_URL = "http://127.0.0.1:8000"
 NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("chat", "对话"),
     ("library", "知识库"),
+    ("mcp", "MCP"),
     ("assets", "资产"),
     ("runtime", "运行时"),
 )
@@ -196,6 +198,11 @@ def _probe(host: str) -> dict[str, Any]:
             data["loaded_model"] = str(rows[0].get("id", ""))
     except RuntimeError:
         pass
+    try:
+        tools = _request_json(host, "/v1/mcp/tools")
+        data["mcp_tools"] = [item for item in tools.get("tools", []) if isinstance(item, dict)]
+    except RuntimeError:
+        data["mcp_tools"] = []
     return data
 
 
@@ -263,6 +270,95 @@ def format_add_result(source_ref: str, title: str, text: str, result: dict[str, 
     return "\n".join(lines)
 
 
+def tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
+    """Return a tool's input schema, tolerating either naming convention."""
+
+    schema = tool.get("input_schema")
+    if not isinstance(schema, dict):
+        schema = tool.get("inputSchema")
+    return schema if isinstance(schema, dict) else {}
+
+
+def mcp_arguments_template(schema: dict[str, Any] | None) -> str:
+    """Build a JSON skeleton from a tool input schema (pure, testable).
+
+    只保留必填字段：否则一屏全是空值，用户还得先删。
+    """
+
+    spec = schema if isinstance(schema, dict) else {}
+    properties = spec.get("properties")
+    properties = properties if isinstance(properties, dict) else {}
+    required = [key for key in (spec.get("required") or []) if isinstance(key, str)]
+    keys = required or [key for key in properties if isinstance(key, str)]
+    skeleton: dict[str, Any] = {}
+    for key in keys:
+        info = properties.get(key)
+        kind = info.get("type") if isinstance(info, dict) else None
+        if key == "owner_scope":
+            skeleton[key] = "local"
+        elif kind == "string":
+            skeleton[key] = ""
+        elif kind in ("integer", "number"):
+            skeleton[key] = 0
+        elif kind == "boolean":
+            skeleton[key] = False
+        elif kind == "array":
+            skeleton[key] = []
+        elif kind == "object":
+            skeleton[key] = {}
+        else:
+            skeleton[key] = None
+    return json.dumps(skeleton, ensure_ascii=False, indent=2)
+
+
+def format_mcp_result(name: str, response: dict[str, Any]) -> str:
+    """Render a JSON-RPC ``tools/call`` response (pure, testable)."""
+
+    lines = [f"MCP · {name}", ""]
+    error = response.get("error")
+    if isinstance(error, dict):
+        lines.append(f"调用失败 : {error.get('message') or error.get('code') or error}")
+        return "\n".join(lines)
+    result = response.get("result")
+    if not isinstance(result, dict):
+        lines.append("（响应里没有 result 字段）")
+        lines.append(f"原始响应 : {json.dumps(response, ensure_ascii=False)[:400]}")
+        return "\n".join(lines)
+    if result.get("isError"):
+        lines.append("工具报告错误 :")
+    content = result.get("content")
+    if isinstance(content, list) and content:
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text")
+                lines.append(str(text) if text is not None else json.dumps(block, ensure_ascii=False))
+            else:
+                lines.append(str(block))
+    else:
+        lines.append(json.dumps(result, ensure_ascii=False, indent=2)[:1200])
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict) and structured:
+        lines.append("")
+        lines.append("结构化结果 :")
+        lines.append(json.dumps(structured, ensure_ascii=False, indent=2)[:1200])
+    return "\n".join(lines)
+
+
+def parse_mcp_arguments(raw: str) -> dict[str, Any]:
+    """Parse the arguments box; raise ``ValueError`` with a readable reason."""
+
+    text = raw.strip()
+    if not text:
+        return {}
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"参数不是合法 JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("参数必须是 JSON 对象（例如 {\"query\": \"缓存\"}）")
+    return value
+
+
 def read_source_file(target: str) -> tuple[str, str]:
     """Read a text file for ingestion; return ``(title, text)``.
 
@@ -324,8 +420,10 @@ def create_app(
         #panel { display: none; height: 1fr; border-top: solid #30363d; }
         #panel-scroll { height: 1fr; }
         #panel-text { height: auto; padding: 1 0; }
+        #mcp-tool-list { display: none; height: auto; max-height: 8; }
         #rag-query { display: none; border: solid #30363d; background: #0d1117; }
         #rag-add { display: none; border: solid #30363d; background: #0d1117; }
+        #mcp-args { display: none; border: solid #30363d; background: #0d1117; }
         #composer { dock: bottom; height: 3; border: solid #30363d; background: #0d1117; }
         ListView { height: auto; max-height: 8; background: #161b22; }
         ListItem { padding: 0 1; color: #8b949e; background: #161b22; }
@@ -342,9 +440,11 @@ def create_app(
         BINDINGS = [
             ("1", "nav(0)", "对话"),
             ("2", "nav(1)", "知识库"),
-            ("3", "nav(2)", "资产"),
-            ("4", "nav(3)", "运行时"),
+            ("3", "nav(2)", "MCP"),
+            ("4", "nav(3)", "资产"),
+            ("5", "nav(4)", "运行时"),
             ("m", "reload_models", "刷新模型"),
+            ("t", "reload_mcp", "刷新工具"),
             ("n", "new_session", "新建会话"),
             ("q", "quit", "退出"),
         ]
@@ -366,6 +466,8 @@ def create_app(
             self._rag_mode = str(rag_mode)
             self._last_query = ""
             self._last_source = ""
+            self._mcp_tools: list[dict[str, Any]] = []
+            self._mcp_tool: str = ""
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -394,8 +496,10 @@ def create_app(
                     with Vertical(id="panel"):
                         with VerticalScroll(id="panel-scroll"):
                             yield Static("", id="panel-text")
+                        yield ListView(id="mcp-tool-list")
                         yield Input(placeholder="检索知识库…（回车执行）", id="rag-query")
                         yield Input(placeholder="入库：本地文档路径…（回车读取并索引）", id="rag-add")
+                        yield Input(placeholder="MCP 参数（JSON）…（回车调用）", id="mcp-args")
                     yield Input(placeholder="输入消息，回车发送…", id="composer")
             yield Footer()
 
@@ -460,6 +564,8 @@ def create_app(
                 self._models = list(data.get("models") or [])
                 self._current_model = data.get("loaded_model") or None
                 self._render_models()
+                self._mcp_tools = list(data.get("mcp_tools") or [])
+                self._render_mcp_tools()
                 if self._sessions:
                     self._select_session(str(self._sessions[0].get("session_id", "")))
             self._render_nav()
@@ -523,16 +629,20 @@ def create_app(
             """Switch the main area between the chat view and the info panels."""
 
             chatting = self._nav == 0
+            on_library = self._nav == 1
+            on_mcp = self._nav == 2
             self.query_one("#transcript-scroll").display = chatting
             self.query_one("#composer").display = chatting
             self.query_one("#panel").display = not chatting
-            # 检索/入库框只在知识库页出现（其他面板是只读的）。
-            self.query_one("#rag-query").display = self._nav == 1
-            self.query_one("#rag-add").display = self._nav == 1
+            # 各页专属控件：只在自己的页面上出现。
+            self.query_one("#rag-query").display = on_library
+            self.query_one("#rag-add").display = on_library
+            self.query_one("#mcp-tool-list").display = on_mcp
+            self.query_one("#mcp-args").display = on_mcp
             self._mark_nav()
             if chatting:
                 return
-            builders = (self._library_panel, self._assets_panel, self._runtime_panel)
+            builders = (self._library_panel, self._mcp_panel, self._assets_panel, self._runtime_panel)
             self._set_panel(builders[self._nav - 1]())
 
         def _mark_nav(self) -> None:
@@ -557,12 +667,28 @@ def create_app(
                 "· 上面第二个框：填入本地文档路径回车，读入并索引（POST /v1/rag/sources）"
             )
 
+        def _mcp_panel(self) -> str:
+            if not self._mcp_tools:
+                return (
+                    "MCP 工具\n\n"
+                    "（没有取到工具列表。按 t 重新拉取；后端未连接时列表为空。）\n\n"
+                    "工具列表来自 GET /v1/mcp/tools，调用走 POST /v1/mcp/call。"
+                )
+            selected = self._mcp_tool or "(未选中)"
+            lines = [f"MCP 工具 · 共 {len(self._mcp_tools)} 个", ""]
+            lines.append(f"当前选中 : {selected}")
+            lines.append("")
+            lines.append("在下方列表里选中一个工具 → 参数框会自动填入必填字段的 JSON 骨架 →")
+            lines.append("填好值后回车调用。按 t 可重新拉取工具列表。")
+            return "\n".join(lines)
+
         def _assets_panel(self) -> str:
             image = self._boot.get("image_raw") or {}
             rows = [f"已注册模型 : {len(self._models)}"]
             if self._current_model:
                 rows.append(f"当前模型   : {self._current_model}")
             rows.append(f"图像运行时 : {self._boot.get('image', 'unavailable')}")
+            rows.append(f"MCP 工具数 : {len(self._mcp_tools)}")
             if image:
                 rows.append(f"  txt2img  : {bool(image.get('supports_txt2img'))}")
                 rows.append(f"  runtime  : {bool(image.get('runtime_available'))}")
@@ -575,7 +701,8 @@ def create_app(
                 f"后端类型 : {self._boot.get('backend', 'unavailable')}\n"
                 f"内嵌后端 : {'是（本 TUI 拉起）' if self._shell is not None else '否（复用外部服务）'}\n"
                 f"会话数   : {len(self._sessions)}\n"
-                f"模型数   : {len(self._models)}"
+                f"模型数   : {len(self._models)}\n"
+                f"MCP 工具 : {len(self._mcp_tools)}"
             )
 
         # ---- knowledge base ----
@@ -650,6 +777,84 @@ def create_app(
             self._set_panel(format_add_result(str(Path(target).expanduser()), title, text, result))
             status.update(f"ONLINE · 已入库 {title}")
 
+        # ---- MCP ----
+        def _render_mcp_tools(self) -> None:
+            view = self.query_one("#mcp-tool-list", ListView)
+            view.clear()
+            for tool in self._mcp_tools:
+                name = str(tool.get("name") or "")
+                if not name:
+                    continue
+                mark = "▸ " if name == self._mcp_tool else "  "
+                view.append(ListItem(Label(f"{mark}{name}"), name=name))
+
+        def action_reload_mcp(self) -> None:
+            try:
+                payload = _request_json(self._host, "/v1/mcp/tools")
+            except RuntimeError:
+                self.query_one("#status", Static).update("OFFLINE · MCP 工具列表不可用")
+                return
+            self._mcp_tools = [item for item in payload.get("tools", []) if isinstance(item, dict)]
+            self._render_mcp_tools()
+            if self._nav == 2:
+                self._render_nav()
+            self.query_one("#status", Static).update(f"ONLINE · MCP 工具 {len(self._mcp_tools)} 个")
+
+        def _select_mcp_tool(self, name: str) -> None:
+            if not name:
+                return
+            self._mcp_tool = name
+            tool = next((t for t in self._mcp_tools if str(t.get("name")) == name), None)
+            description = str((tool or {}).get("description") or "")
+            template = mcp_arguments_template(tool_schema(tool or {}))
+            try:
+                self.query_one("#mcp-args", Input).value = "" if template.strip() == "{}" else template
+                self.query_one("#mcp-args", Input).focus()
+            except Exception:  # noqa: BLE001
+                pass
+            self._render_mcp_tools()
+            self._set_panel(
+                "\n".join(
+                    [
+                        f"MCP · {name}",
+                        "",
+                        description or "(无描述)",
+                        "",
+                        "参数已填入下方输入框（只含必填字段）。补齐后回车调用。",
+                        "多行 JSON 可先用默认骨架改成单行，或直接编辑后回车。",
+                    ]
+                )
+            )
+
+        def _call_mcp(self, raw: str) -> None:
+            name = self._mcp_tool
+            if not name:
+                self._set_panel("MCP · 尚未选中工具\n\n请先在下方列表里选一个工具。")
+                return
+            status = self.query_one("#status", Static)
+            try:
+                arguments = parse_mcp_arguments(raw)
+            except ValueError as exc:
+                self._set_panel(f"MCP · {name}\n\n参数错误：{exc}")
+                status.update("OFFLINE · MCP 参数错误")
+                return
+            status.update(f"CALLING · {name}")
+            self._set_panel(f"MCP · {name}\n\n调用中…")
+            try:
+                response = _request_json(
+                    self._host,
+                    "/v1/mcp/call",
+                    {"name": name, "arguments": arguments},
+                    timeout=120.0,
+                )
+            except RuntimeError as exc:
+                self._set_panel(f"MCP · {name}\n\n调用失败：{exc}")
+                status.update("OFFLINE · MCP 调用失败")
+                return
+            self._set_panel(format_mcp_result(name, response))
+            failed = bool(response.get("error")) or bool((response.get("result") or {}).get("isError"))
+            status.update(f"{'OFFLINE' if failed else 'ONLINE'} · MCP {name} {'失败' if failed else '完成'}")
+
         # ---- models ----
         def _render_models(self) -> None:
             view = self.query_one("#model-list", ListView)
@@ -670,7 +875,7 @@ def create_app(
                 return
             self._models = [item for item in assets.get("models", []) if isinstance(item, dict)]
             self._render_models()
-            if self._nav == 2:
+            if self._nav == 3:
                 self._render_nav()
 
         def _switch_model(self, model_id: str) -> None:
@@ -723,6 +928,8 @@ def create_app(
                 self._select_session(name)
             elif which == "model-list":
                 self._switch_model(name)
+            elif which == "mcp-tool-list":
+                self._select_mcp_tool(name)
 
         def action_new_session(self) -> None:
             self._create_session()
@@ -748,7 +955,7 @@ def create_app(
                 self.action_nav(0)
             self._set_transcript("KOAKUMIX\n\n等待一条消息。")
 
-        # ---- inputs：检索框 / 入库框 / 对话框 分流 ----
+        # ---- inputs：检索框 / 入库框 / MCP 参数框 / 对话框 分流 ----
         def on_input_submitted(self, event: Input.Submitted) -> None:
             widget_id = getattr(event.input, "id", None)
             text = event.value.strip()
@@ -759,6 +966,10 @@ def create_app(
             if widget_id == "rag-add":
                 event.input.value = ""
                 self._add_rag_source(text)
+                return
+            if widget_id == "mcp-args":
+                # 参数框保留原值：允许在同一次会话里微调后重复调用。
+                self._call_mcp(event.value)
                 return
             if not text:
                 return
@@ -828,8 +1039,12 @@ __all__ = [
     "build_parser",
     "create_app",
     "format_add_result",
+    "format_mcp_result",
     "format_rag_result",
     "main",
+    "mcp_arguments_template",
+    "parse_mcp_arguments",
     "read_source_file",
     "start_local_backend",
+    "tool_schema",
 ]

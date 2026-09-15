@@ -122,11 +122,17 @@ def test_nav_switches_panels_and_back_to_chat():
             assert app.query_one("#transcript-scroll").display is False
             assert app.query_one("#composer").display is False
             assert app.query_one("#panel").display is True
-            assert "知识库" in str(app.query_one("#panel-text").content)
+            # 用 startswith 精确匹配页面标题。原先用 in 断言「运行时」，而资产页的
+            # 「图像运行时」也含这三个字 —— 页序一变就假通过了。
+            assert str(app.query_one("#panel-text").content).startswith("知识库")
 
-            app.action_nav(3)  # 运行时
+            app.action_nav(3)  # 资产（页序：对话 / 知识库 / MCP / 资产 / 运行时）
             await pilot.pause()
-            assert "运行时" in str(app.query_one("#panel-text").content)
+            assert str(app.query_one("#panel-text").content).startswith("资产")
+
+            app.action_nav(4)  # 运行时
+            await pilot.pause()
+            assert str(app.query_one("#panel-text").content).startswith("运行时")
 
             app.action_nav(0)  # 回到对话
             await pilot.pause()
@@ -251,6 +257,96 @@ def test_library_panel_can_ingest(tmp_path):
             app.action_nav(0)
             await pilot.pause()
             assert app.query_one("#rag-add").display is False, "对话页不应显示入库框"
+
+    asyncio.run(scenario())
+
+
+def test_mcp_arguments_template_keeps_required_only():
+    """参数骨架只保留必填字段，避免一屏空值要用户先删。"""
+
+    import json
+
+    from harness_workbench import tui
+
+    schema = {
+        "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}, "owner_scope": {"type": "string"}},
+        "required": ["query"],
+    }
+    assert json.loads(tui.mcp_arguments_template(schema)) == {"query": ""}
+
+    # 没有 required 时退回全部属性，并按类型给出占位值
+    loose = tui.mcp_arguments_template(
+        {"properties": {"a": {"type": "integer"}, "b": {"type": "boolean"}, "owner_scope": {"type": "string"}}}
+    )
+    assert json.loads(loose) == {"a": 0, "b": False, "owner_scope": "local"}
+
+    assert tui.mcp_arguments_template(None) == "{}"
+
+
+def test_parse_mcp_arguments_rejects_bad_json():
+    from harness_workbench import tui
+
+    assert tui.parse_mcp_arguments("") == {}
+    assert tui.parse_mcp_arguments('{"a": 1}') == {"a": 1}
+    with pytest.raises(ValueError, match="合法 JSON"):
+        tui.parse_mcp_arguments("nope")
+    with pytest.raises(ValueError, match="JSON 对象"):
+        tui.parse_mcp_arguments("[1, 2]")
+
+
+def test_format_mcp_result_handles_content_and_error():
+    from harness_workbench import tui
+
+    ok = tui.format_mcp_result("t", {"result": {"content": [{"type": "text", "text": "完成"}]}})
+    assert "t" in ok and "完成" in ok
+
+    err = tui.format_mcp_result("t", {"error": {"code": -32601, "message": "未知工具"}})
+    assert "调用失败" in err and "未知工具" in err
+
+
+def test_mcp_page_lists_tools_and_calls_selected():
+    """MCP 页：工具列表仅该页可见；选中后自动填参数骨架；回车发起调用。"""
+
+    import asyncio
+    import json
+
+    from harness_workbench import tui
+
+    tools = [
+        {
+            "name": "rag_search",
+            "description": "搜索",
+            "input_schema": {"properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+        {"name": "skill_list", "description": "列技能", "input_schema": {"properties": {}}},
+    ]
+
+    async def scenario() -> None:
+        app = tui.create_app(host="http://127.0.0.1:1", serve=False, splash=False)
+        app._mcp_tools = tools  # 注入工具定义，避免为跑测试起真后端
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._render_mcp_tools()
+            app.action_nav(2)
+            await pilot.pause()
+            assert app.query_one("#mcp-tool-list").display is True
+            assert app.query_one("#mcp-args").display is True
+            assert app.query_one("#rag-query").display is False, "知识库专有控件不应出现在 MCP 页"
+
+            app._select_mcp_tool("rag_search")
+            await pilot.pause()
+            assert "rag_search" in str(app.query_one("#panel-text").content)
+            assert json.loads(app.query_one("#mcp-args").value) == {"query": ""}
+
+            # 离线 host：调用会失败，但必须有反馈（证明确实发起了调用）
+            app.query_one("#mcp-args").value = '{"query": "缓存"}'
+            await pilot.press("enter")
+            await pilot.pause()
+            assert "rag_search" in str(app.query_one("#panel-text").content)
+
+            app.action_nav(0)
+            await pilot.pause()
+            assert app.query_one("#mcp-tool-list").display is False
 
     asyncio.run(scenario())
 
